@@ -121,6 +121,65 @@ test("opening a form shows its responses and a working CSV export", async () => 
   assert.deepEqual(lastCells, ["2026-10-27 11:00", "Grace Hopper", "A compiler.", "5000"]);
 });
 
+test("an answer its own schema omits still shows in the table next to a schema that names the id", async () => {
+  // The form no longer has the email question. One response was collected
+  // while it did, so its schema records it; a legacy response backfilled
+  // after the removal still carries its answer, but the schema it was
+  // backfilled with no longer names the id. The other response's schema
+  // naming the id must not hide that answer.
+  const sparseForm = {
+    slug: "client-enquiry",
+    title: "Client enquiry",
+    published: true,
+    responseCount: 2,
+    questions: [{ id: "q1", type: "text", label: "What's your name?" }],
+  };
+  const sparseResponses = [
+    {
+      id: "r1",
+      submittedAt: "2026-10-27T10:00:00Z",
+      schema: [
+        { id: "q1", label: "What's your name?" },
+        { id: "q2", label: "What's your email?" },
+      ],
+      answers: { q1: "Ada Lovelace", q2: "ada@example.com" },
+    },
+    {
+      id: "r2",
+      submittedAt: "2026-10-27T11:00:00Z",
+      schema: [{ id: "q1", label: "What's your name?" }],
+      answers: { q1: "Grace Hopper", q2: "grace@example.com" },
+    },
+  ];
+  const { document, app } = createDocument();
+  const fetchStub = async (path) => {
+    if (path === "/api/owner/status") return jsonResponse(200, { configured: true });
+    if (path === "/api/forms") return jsonResponse(200, [sparseForm]);
+    if (path === "/api/forms/client-enquiry") return jsonResponse(200, sparseForm);
+    if (path === "/api/forms/client-enquiry/responses") return jsonResponse(200, sparseResponses);
+    throw new Error(`unexpected fetch: ${path}`);
+  };
+  runPage(source, { document, fetch: fetchStub, preludes: [columnsSource] });
+  await settle();
+
+  findByText(app.querySelectorAll("button"), "Responses").emit("click");
+  await settle(3);
+
+  const headers = app.querySelectorAll("th").map((th) => th.textContent);
+  assert.deepEqual(headers, [
+    "Submitted",
+    "What's your name?",
+    "What's your email?",
+    "q2",
+  ]);
+  const rows = app.querySelectorAll("tbody tr");
+  assert.equal(rows.length, 2);
+  const firstCells = rows[0].querySelectorAll("td").map((td) => td.textContent);
+  assert.deepEqual(firstCells, ["2026-10-27 10:00", "Ada Lovelace", "ada@example.com", ""]);
+  const lastCells = rows[1].querySelectorAll("td").map((td) => td.textContent);
+  assert.deepEqual(lastCells, ["2026-10-27 11:00", "Grace Hopper", "", "grace@example.com"]);
+});
+
 test("the share link shows its URL and copies that exact string", async () => {
   let copied = null;
   const navigator = { clipboard: { writeText: async (t) => (copied = t) } };

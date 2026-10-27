@@ -20,11 +20,11 @@
   function responseColumns(form, responses) {
     const columns = [];
     const seen = new Set();
-    const add = (id, label) => {
+    const add = (id, label, extra) => {
       const key = `${id}\u0000${label}`;
       if (seen.has(key)) return;
       seen.add(key);
-      columns.push({ id, label });
+      columns.push({ id, label, ...extra });
     };
 
     for (const q of (form && form.questions) || []) add(q.id, q.label);
@@ -33,18 +33,30 @@
         if (q && q.id) add(q.id, q.label);
       }
     }
-    // A legacy answer can outdate even that union: a response stored before
-    // schemas existed (or migrated before its form was edited) may carry an
-    // answer id that no current question and no recorded schema names. Drop
-    // it from the columns and that answer becomes invisible in the table
-    // and the export, so give it its own column, labelled by its id — the
-    // only name left for it.
-    const covered = new Set(columns.map((c) => c.id));
+    const coveredIds = new Set(columns.map((c) => c.id));
+    // An answer can still have no column of its own, per response:
+    //
+    // 1. A response WITH a schema carrying an answer id its own schema does
+    //    not name — a legacy response backfilled after its question was
+    //    removed, most often. Another response's schema naming that id must
+    //    not hide it: the two answers were collected under different
+    //    question versions, and folding the unaccounted one into the
+    //    recorded column would mislabel it as that version's answer.
+    // 2. A response WITHOUT a schema (collected before schemas existed)
+    //    carrying an id no current question and no recorded schema names.
+    //
+    // Both get their own column, labelled by the id — the only name left
+    // for it. `covered` records whether a schema-backed column for the id
+    // also exists, so cellValue can keep a schema-less answer (which maps
+    // by id alone) out of the orphan column when that column already
+    // collects it elsewhere.
     for (const r of responses) {
+      const schemaIds = r.schema
+        ? new Set(r.schema.filter((q) => q && q.id).map((q) => q.id))
+        : null;
       for (const key of Object.keys(r.answers || {})) {
-        if (covered.has(key)) continue;
-        covered.add(key);
-        columns.push({ id: key, label: key, orphan: true });
+        if (schemaIds ? schemaIds.has(key) : coveredIds.has(key)) continue;
+        add(key, key, { orphan: true, covered: coveredIds.has(key) });
       }
     }
     return columns;
@@ -63,17 +75,28 @@
   // The value a response contributes to a column: its answer when the
   // response's own schema answered exactly this question version, else
   // nothing. Responses stored before schemas existed map by id alone.
-  // An orphan column holds answers whose question version is unknown to
-  // every schema, so any response actually carrying that answer id
-  // contributes it.
+  //
+  // An orphan column holds answers whose question version no schema
+  // accounts for, and which answers land there is decided per response:
+  //   - a response WITH a schema contributes an answer only when its own
+  //     schema does not name the id — when it does, the answer already
+  //     sits in that schema-backed column, and repeating it here would
+  //     duplicate it;
+  //   - a response WITHOUT a schema maps by id alone, so it contributes
+  //     only when no schema-backed column for the id exists to take it
+  //     (`covered` off) — otherwise it would appear in both columns.
   function cellValue(response, column) {
-    if (!column.orphan) {
-      if (
-        response.schema &&
-        !response.schema.some((q) => q && q.id === column.id && q.label === column.label)
-      ) {
+    if (column.orphan) {
+      if (response.schema) {
+        if (response.schema.some((q) => q && q.id === column.id)) return "";
+      } else if (column.covered) {
         return "";
       }
+    } else if (
+      response.schema &&
+      !response.schema.some((q) => q && q.id === column.id && q.label === column.label)
+    ) {
+      return "";
     }
     const v = response.answers ? response.answers[column.id] : undefined;
     return v === undefined || v === null ? "" : v;

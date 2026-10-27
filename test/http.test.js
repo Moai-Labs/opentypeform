@@ -431,6 +431,55 @@ test("a submission still in flight cannot outlive its deleted form", async () =>
   server.close();
 });
 
+test("a submission paused over a deleted-and-recreated form is rejected, not stored under the replacement", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Displaced",
+      questions: [{ type: "text", label: "Name?" }],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+
+  // Open the submission and pause it inside the body read.
+  const payload = JSON.stringify({ answers: { q1: "meant for the deleted form" } });
+  const socket = await pausedRequest(base, "POST", `/api/forms/${slug}/responses`, null, payload);
+
+  // While the body is arriving, the owner deletes the form and publishes a
+  // replacement under the same slug.
+  const deleted = await fetch(`${base}/api/forms/${slug}`, { method: "DELETE", headers: bearer(token) });
+  assert.equal(deleted.status, 204);
+  const recreated = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Displaced",
+      questions: [{ type: "number", label: "Budget?" }],
+      published: true,
+    }),
+  });
+  assert.equal(recreated.status, 201);
+
+  // Completing the submission must not validate it against — or store it
+  // under — the replacement: the deleted form's answers are not its data.
+  socket.end(payload.slice(10));
+  assert.match(
+    await drain(socket),
+    /^HTTP\/1\.1 409/,
+    "recreation is a conflict, not a misattributed answer",
+  );
+
+  const responses = await (
+    await fetch(`${base}/api/forms/${slug}/responses`, { headers: bearer(token) })
+  ).json();
+  assert.deepEqual(responses, [], "the replacement receives no response");
+  server.close();
+});
+
 test("CSV export escapes separators, quotes, newlines and formulas", async () => {
   const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
   const token = await claim(base);

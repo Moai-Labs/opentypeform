@@ -208,3 +208,105 @@ test("an interruption before the first write of a deletion is finished on boot",
   assert.equal(restarted.getForm("a"), null, "the journalled deletion is completed");
   assert.deepEqual(restarted.listResponses("a"), []);
 });
+
+test("a failed deletion write blocks mutations until the journal is finished", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "a", title: "A", published: true, questions: [] });
+  store.addForm({ slug: "b", title: "B", published: true, questions: [] });
+  store.addResponse({ id: "r1", formSlug: "a", answers: { q1: "x" }, submittedAt: "t" });
+
+  // The forms write fails mid-deletion: the journal is left pending with
+  // the server still running, and neither data file was touched.
+  const failing = new Store(dir);
+  failing.saveForms = () => {
+    throw new Error("disk full");
+  };
+  assert.throws(() => failing.deleteForm("a"), /disk full/);
+  assert.equal(failing.pendingDeletion, "a", "the journal stays pending in memory too");
+  assert.equal(failing.getForm("a").title, "A", "reads still report the form on disk");
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dir, "forms.json"), "utf8")).length,
+    2,
+    "forms.json on disk is untouched",
+  );
+
+  // Recreation under the still-occupied slug is refused while the journal
+  // is unresolved: the mutation first retries the recovery, which fails
+  // again, and nothing slips through either way.
+  assert.throws(
+    () => failing.addForm({ slug: "a", title: "A again", published: true, questions: [] }),
+    /unresolved/,
+  );
+  assert.equal(failing.getForm("a").title, "A", "no replacement was created");
+
+  // A further deletion is refused as well: it must not overwrite the
+  // pending journal.
+  assert.throws(() => failing.deleteForm("b"), /unresolved/);
+  const journal = JSON.parse(fs.readFileSync(path.join(dir, "delete-journal.json"), "utf8"));
+  assert.equal(journal.slug, "a", "the journal still names the original deletion");
+
+  // With the writes working again, the next mutation finishes the pending
+  // deletion first, and what it then accepts survives a reload.
+  delete failing.saveForms;
+  failing.addForm({ slug: "a", title: "A again", published: true, questions: [] });
+  assert.equal(failing.pendingDeletion, null, "the recovery completed");
+  assert.ok(!fs.existsSync(path.join(dir, "delete-journal.json")), "the journal is cleared");
+
+  const reloaded = new Store(dir);
+  assert.equal(reloaded.getForm("a").title, "A again", "the replacement survives the reload");
+  assert.deepEqual(reloaded.listResponses("a"), [], "no deleted response rides along");
+  assert.equal(reloaded.getForm("b").title, "B", "the unrelated form is untouched");
+});
+
+test("a store whose boot recovery fails comes up read-only, then recovers with the next mutation", () => {
+  const dir = tmpDir();
+  const setup = new Store(dir);
+  setup.addForm({ slug: "a", title: "A", published: true, questions: [] });
+  setup.addResponse({ id: "r1", formSlug: "a", answers: { q1: "x" }, submittedAt: "t" });
+  // An interrupted deletion: the journal is on disk, the data files are
+  // untouched.
+  setup.writeJson(setup.journalFile, { slug: "a", startedAt: "t" });
+
+  // Boot recovery cannot write, so the journal stays pending; the store
+  // must come up anyway (reads work) but accept no mutation on top of it.
+  const original = Store.prototype.saveForms;
+  Store.prototype.saveForms = () => {
+    throw new Error("read-only volume");
+  };
+  let locked;
+  try {
+    locked = new Store(dir);
+  } finally {
+    Store.prototype.saveForms = original;
+  }
+  assert.equal(locked.pendingDeletion, "a", "the failed recovery leaves the journal pending");
+  assert.equal(locked.getForm("a").title, "A", "reads still work");
+
+  // While the writes keep failing, every mutation is refused: the
+  // recovery retry hits the same error and nothing else is attempted.
+  locked.saveForms = () => {
+    throw new Error("still read-only");
+  };
+  assert.throws(
+    () => locked.addForm({ slug: "c", title: "C", published: true, questions: [] }),
+    /unresolved/,
+  );
+  assert.throws(
+    () => locked.addResponse({ id: "r2", formSlug: "a", answers: { q1: "y" }, submittedAt: "t" }),
+    /unresolved/,
+  );
+  assert.throws(() => locked.deleteForm("a"), /unresolved/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "forms.json"), "utf8")).length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "delete-journal.json"), "utf8")).slug, "a");
+
+  // Writes work again: the next mutation finishes the pending deletion
+  // first, and its result survives a reload.
+  delete locked.saveForms;
+  locked.addForm({ slug: "c", title: "C", published: true, questions: [] });
+  const reloaded = new Store(dir);
+  assert.equal(reloaded.getForm("a"), null, "the journalled deletion is completed");
+  assert.deepEqual(reloaded.listResponses("a"), []);
+  assert.equal(reloaded.getForm("c").title, "C");
+  assert.ok(!fs.existsSync(path.join(dir, "delete-journal.json")));
+});

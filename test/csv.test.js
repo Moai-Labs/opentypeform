@@ -109,3 +109,36 @@ test("answers survive removing or relabelling their question", () => {
   ]);
   assert.match(legacy, /Grace/);
 });
+
+test("an answer its own schema omits keeps its own column even when another schema names the id", () => {
+  // The form no longer has the email question. One response was collected
+  // while it did, so its schema records it; a legacy response backfilled
+  // after the removal still carries its answer, but the schema it was
+  // backfilled with no longer names the id. That answer must not be
+  // folded into the recorded column — it was asked under another version
+  // of the question — nor hidden by it.
+  const current = { questions: [{ id: "q1", label: "Name?" }] };
+  const responses = [
+    {
+      submittedAt: "2026-10-27T09:00:00Z",
+      schema: [
+        { id: "q1", label: "Name?" },
+        { id: "q2", label: "Email?" },
+      ],
+      answers: { q1: "B", q2: "b@example.com" },
+    },
+    {
+      submittedAt: "2026-10-27T10:00:00Z",
+      schema: [{ id: "q1", label: "Name?" }],
+      answers: { q1: "L", q2: "l@example.com" },
+    },
+  ];
+  const csv = responsesCsv(current, responses);
+  const lines = csv.split("\r\n");
+  assert.deepEqual(lines, [
+    "submittedAt,Name?,Email?,q2",
+    "2026-10-27T09:00:00Z,B,b@example.com,",
+    "2026-10-27T10:00:00Z,L,,l@example.com",
+    "",
+  ]);
+});
