@@ -1,6 +1,8 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json server.js ./
+COPY package.json package-lock.json server.js ./
+# One production dependency (@noble/hashes, pure JS) — installed at build.
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY lib ./lib
 COPY public ./public
 # The store writes its JSON files here by default, so the directory must be
