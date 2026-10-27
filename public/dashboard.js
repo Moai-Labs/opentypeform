@@ -6,10 +6,12 @@
 (function () {
   const app = document.getElementById("app");
 
-  const el = (tag, cls, text) => {
+  // Builds an element: optional class, then any mix of child nodes, arrays
+  // of them, and text.
+  const el = (tag, cls, ...children) => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
-    if (text !== undefined) node.textContent = text;
+    node.append(...children.flat());
     return node;
   };
 
@@ -258,19 +260,27 @@
 
   function responsesTable(form, responses) {
     if (!responses.length) return null;
+    const ordered = [...responses].sort((a, b) =>
+      String(a.submittedAt).localeCompare(String(b.submittedAt)),
+    );
+    // Columns cover the questions as they are now *and* as they were when
+    // each answer was collected, so edits and removals never hide or
+    // mislabel history (shared with the CSV export).
+    const columns = responseColumns(form, ordered);
+    const headers = columnHeaders(columns);
+
     const table = el("table");
     const thead = el("thead");
     const hr = el("tr");
     hr.append(el("th", null, "Submitted"));
-    for (const q of form.questions) hr.append(el("th", null, q.label));
+    for (const label of headers) hr.append(el("th", null, label));
     thead.append(hr);
     const tbody = el("tbody");
-    for (const r of [...responses].sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)))) {
+    for (const r of ordered) {
       const tr = el("tr");
       tr.append(el("td", "muted", String(r.submittedAt).replace("T", " ").slice(0, 16)));
-      for (const q of form.questions) {
-        const v = r.answers ? r.answers[q.id] : "";
-        tr.append(el("td", null, v === undefined || v === null ? "" : String(v)));
+      for (const c of columns) {
+        tr.append(el("td", null, String(cellValue(r, c))));
       }
       tbody.append(tr);
     }
