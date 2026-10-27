@@ -81,3 +81,16 @@ test("deleting a form removes it and all of its responses", () => {
 
   assert.equal(store.deleteForm("a"), false, "deleting twice changes nothing");
 });
+
+test("deleting every form does not bring the template back on restart", () => {
+  const dir = tmpDir();
+  const first = new Store(dir);
+  assert.ok(seedIfNeeded(first), "first boot seeds");
+  first.deleteForm(TEMPLATE_SLUG);
+  assert.equal(first.listForms().length, 0);
+
+  // A restart over an intentionally emptied store must stay empty.
+  const second = new Store(dir);
+  assert.equal(seedIfNeeded(second), null, "an initialized empty store stays empty");
+  assert.equal(second.listForms().length, 0);
+});

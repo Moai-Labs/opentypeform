@@ -5,6 +5,12 @@
 // payment record with its own receiving address; the server watches that
 // address on the chain and lifts the limits the moment the right amount
 // arrives — no third-party payment service, verified in the product itself.
+//
+// Confirmation is keyed to what actually changed on-chain: for a first
+// payment, the plan turning paid; for an extension, the plan's expiry
+// moving past where it stood when the payment was started. A paid plan
+// sitting still proves nothing, so the page keeps showing the address and
+// the waiting state until a new payment is really credited.
 "use strict";
 
 (function () {
@@ -63,10 +69,10 @@
     if (paid) {
       // Still show the renewal panel: a new payment adds another 30 days
       // whenever the current window is close to its end.
-      children.append(paymentPanel(status, "Extend Pro with another 30 days"));
+      children.push(paymentPanel(status, "Extend Pro with another 30 days", plan.paidUntil));
     } else {
-      children.append(el("p", "error", plan.used >= plan.limit ? "Collection is paused — you have used every response your free plan allows this month. Pay below to lift the limit immediately." : ""));
-      children.append(paymentPanel(status, "Upgrade to Pro"));
+      children.push(el("p", "error", plan.used >= plan.limit ? "Collection is paused — you have used every response your free plan allows this month. Pay below to lift the limit immediately." : ""));
+      children.push(paymentPanel(status, "Upgrade to Pro", null));
     }
 
     app.replaceChildren(...children.filter(Boolean));
@@ -87,8 +93,14 @@
   // The payment panel: start a payment, then show the address and wait. The
   // status line below is what the server verifies — it watches the chain so
   // the page does not have to.
-  function paymentPanel(status, label) {
+  //
+  // baselinePaidUntil is the plan's expiry as it stood when this panel took
+  // over (null on the free plan). A renewal is confirmed only once the
+  // expiry moves past it — proof that a new payment was credited — never
+  // merely because the plan is already paid.
+  function paymentPanel(status, label, baselinePaidUntil) {
     const panel = el("div", "pay-panel");
+    let baseline = baselinePaidUntil;
 
     const test = el("p", "test-note", "TEST PAYMENT — test USDC on a public testnet. Nothing real changes hands; this exists so the product can be tried end to end.");
     panel.append(test);
@@ -100,6 +112,14 @@
 
     async function start() {
       pay.disabled = true;
+      // A renewal must be judged against the expiry as it stands now, not
+      // as it stood when the page loaded.
+      try {
+        const s = await fetch("/api/billing/status").then((r) => r.json());
+        if (s.plan && s.plan.paidUntil) baseline = s.plan.paidUntil;
+      } catch {
+        // The baseline from render time is still a sane floor.
+      }
       const r = await fetch("/api/billing/start", json("POST", {}));
       const body = await r.json().catch(() => ({}));
       pay.disabled = false;
@@ -122,19 +142,38 @@
       state.textContent = "Waiting for the payment to arrive on-chain…";
     }
 
+    function waitingLine(plan) {
+      return plan ? `Waiting for the payment… ${plan.used} of ${plan.limit} responses used this month.` : "Waiting for the payment…";
+    }
+
+    // True when a newly credited payment has moved the plan past its
+    // baseline: first payment — the plan turned paid; renewal — the expiry
+    // advanced.
+    function credited(plan) {
+      if (!plan) return false;
+      if (!baseline) return plan.tier === "paid";
+      return Boolean(plan.paidUntil) && Date.parse(plan.paidUntil) > Date.parse(baseline);
+    }
+
     async function poll() {
       try {
         const s = await fetch("/api/billing/status").then((r) => r.json());
-        if (s.lastCheckError) {
-          state.textContent = "Could not reach the chain just now — still trying.";
-        } else if (s.awaiting) {
-          showPayment(s.awaiting);
-          if (s.plan) state.textContent = `Waiting for the payment… ${s.plan.used} of ${s.plan.limit} responses used this month.`;
-        } else if (s.plan && s.plan.tier === "paid") {
+        if (credited(s.plan)) {
           state.textContent = "Payment confirmed on-chain — the limits are lifted. Thank you!";
           pay.remove();
           refreshSoon();
           return;
+        }
+        if (s.lastCheckError) {
+          state.textContent = "Could not reach the chain just now — still trying.";
+        } else if (s.awaiting) {
+          showPayment(s.awaiting);
+          state.textContent = waitingLine(s.plan);
+        } else if (s.payment) {
+          // Already paid, waiting on an extension: keep the address and the
+          // waiting state up until the expiry actually moves.
+          showPayment(s.payment);
+          state.textContent = waitingLine(s.plan);
         }
       } catch {
         state.textContent = "Network hiccup — still trying.";
@@ -149,7 +188,9 @@
 
     pay.addEventListener("click", start);
     panel.append(pay, info, state);
-    // A payment may already be in flight from an earlier visit.
+    // A payment may already be in flight from an earlier visit — the server
+    // reports it as awaited while uncredited test USDC sits on the address.
+    // Keep its address up and keep watching until it lands.
     if (status.awaiting) {
       showPayment(status.awaiting);
       poll();

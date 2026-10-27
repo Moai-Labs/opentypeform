@@ -7,9 +7,31 @@ matters most. Everything the agent builds is public, here, from the first commit
 
 ## The product
 
-A conversational form builder: one question at a time, at a shareable link. Respondents never
-need an account. Owners sign up with email and password, build forms from a starting template,
-publish them, and collect and export responses.
+- **Accounts** — owners sign up with email and password (no verification
+  email: this stack has no mail service, so the address is the sign-in
+  credential). Every form belongs to the account that created it; one
+  account never sees another's.
+- **The form runner** — a form served at a shareable public link (`/f/<slug>`)
+  that asks one question at a time, validates as it goes and stores every
+  response server-side. Question types: text, email, number, choice and
+  rating; each question is required or optional.
+- **The dashboard** (`/dashboard`) — the owner's home: lists every form with
+  its response count, opens a form's responses as a table, exports them as
+  CSV, publishes/unpublishes, and deletes a form together with its responses.
+- **The builder** (`/builder`) — create a form blank or from the starting
+  template; add, edit, reorder and remove questions; save; publish; copy the
+  share link.
+- **Billing** (`/billing`) — the free tier and the paid plan, payable in
+  test USDC verified on-chain by the product itself.
+- **A seeded starting template** — on first boot, a ready-made "Client
+  enquiry" form is created and published at `/f/enquiry`, so a first form
+  takes minutes, not an hour. It is seeded exactly once (marked durably), so
+  deleting every form does not bring it back on a restart.
+- **Durable storage** — form definitions and responses live as JSON files
+  under `DATA_DIR` (default: a mounted `/data` volume when present, else
+  `./data`; the Docker image defaults to `/data`). Every write goes through a
+  temp-file rename, so a crash cannot leave a half-written store behind; on
+  boot the store is read back. The restore path is covered by tests.
 
 - `POST /api/auth/*` — email + password accounts; every form belongs to its creator.
 - `/builder` — create and edit questions, publish, get the share link.

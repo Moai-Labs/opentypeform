@@ -31,6 +31,7 @@
         refresh: () => showStep(flow.step),
         submit,
         done: showDone,
+        error: renderRetry,
       });
       // Over the plan's monthly limit, collection pauses: say so instead of
       // starting a conversation that cannot end in a stored answer.
@@ -150,8 +151,10 @@
     bar.style.width = `${Math.round(fraction * 100)}%`;
   }
 
-  // Returns true when the response was stored; the flow ends the conversation
-  // only on that outcome, so a rejected submission stays answerable.
+  // Resolves true when the response was stored, { field, message } when the
+  // server rejected one answer, or { error } when the request itself failed.
+  // The flow owns what happens next — it navigates to the rejected question
+  // or parks on the retry screen — so no outcome is ever painted over.
   async function submit(cleaned) {
     setProgress(1);
     try {
@@ -169,16 +172,13 @@
           return false;
         }
         if (body.field) {
-          flow.errors[body.field] = body.error || "Please check this answer.";
-          const i = form.questions.findIndex((q) => q.id === body.field);
-          if (i >= 0) showStep(i);
-          return false;
+          return { field: body.field, message: body.error || "Please check this answer." };
         }
-        return renderRetry(body.error || "Something went wrong. Please try again.");
+        return { error: body.error || "Something went wrong. Please try again." };
       }
       return true;
     } catch {
-      return renderRetry("Network error. Please try again.");
+      return { error: "Network error. Please try again." };
     }
   }
 
@@ -197,17 +197,13 @@
   }
 
   // A network or server failure is not a validation error on one question;
-  // offer a retry from the last step.
+  // park on an explicit error screen until the respondent retries.
   function renderRetry(message) {
-    app.replaceChildren(
-      el("p", "error", message),
-      el("button", "primary", "Back to the form"),
-    );
+    app.replaceChildren(el("p", "error", message), el("button", "primary", "Try again"));
     app.querySelector("button").addEventListener("click", () => {
       setProgress(flow.step / form.questions.length);
-      showStep(flow.step);
+      flow.retry();
     });
-    return false;
   }
 
   function showDone() {

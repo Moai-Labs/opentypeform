@@ -12,12 +12,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-  // form: { questions: [...] }; hooks: { show, refresh, submit, done }.
+  // form: { questions: [...] }; hooks: { show, refresh, submit, done, error }.
   // hooks.show(step) renders the welcome (step -1) or a question;
   // hooks.refresh() repaints the current question; hooks.submit(cleanAnswers)
-  // returns a promise of true (stored) or false (rejected); hooks.done() runs
-  // after a stored submission. options.autoAdvanceMs replaces the 250ms
-  // auto-advance (null disables it — tests use it to control timing).
+  // returns a promise of true (stored), false (rejected), { field, message }
+  // (one answer rejected by the server) or { error } (network/server
+  // failure); hooks.error(message) renders the failure screen when provided;
+  // hooks.done() runs after a stored submission. options.autoAdvanceMs
+  // replaces the 250ms auto-advance (null disables it — tests use it to
+  // control timing).
   return function createFlow(form, hooks, options) {
     const opts = options || {};
     const autoAdvanceMs = opts.autoAdvanceMs === undefined ? 250 : opts.autoAdvanceMs;
@@ -28,6 +31,9 @@
     let timer = null;
     let submitting = false;
     let completed = false;
+    // Set while a non-field failure (network, server error) is on screen;
+    // cleared when the respondent retries.
+    let failed = null;
 
     function locked() {
       return submitting || completed;
@@ -112,19 +118,57 @@
 
     // Only one submission may ever be in flight, and a stored one ends the
     // flow: stale timers and late clicks can neither navigate nor resubmit.
+    //
+    // The submit hook resolves true (stored), { field, message } (the server
+    // rejected one answer — the flow unlocks and navigates to that question
+    // with its error), { error } (network/server failure — the flow parks on
+    // an error screen until retry()), or false (the hook rendered the whole
+    // outcome itself — such as the plan-limit pause screen — and the flow
+    // leaves it alone). Either way the outcome owns the screen, so nothing
+    // repaints over a rejection or error the respondent has not dealt
+    // with yet.
     function submit() {
       if (locked()) return;
       submitting = true;
       cancelTimer();
-      Promise.resolve(hooks.submit(collect())).then((ok) => {
+      Promise.resolve(hooks.submit(collect())).then((result) => {
         submitting = false;
-        if (ok) {
+        cancelTimer();
+        if (result === true) {
           completed = true;
           if (hooks.done) hooks.done();
-        } else {
-          hooks.refresh();
+          return;
         }
+        if (result && typeof result === "object" && result.field) {
+          const i = questions.findIndex((q) => q.id === result.field);
+          if (i >= 0) {
+            failed = null;
+            errors[result.field] = result.message || "Please check this answer.";
+            step = i;
+            hooks.show(i);
+            return;
+          }
+          result = { error: result.message };
+        }
+        if (result && typeof result === "object" && result.error) {
+          failed = result.error;
+          if (hooks.error) hooks.error(failed);
+          else hooks.refresh();
+          return;
+        }
+        // false means the submit hook already rendered the outcome itself —
+        // a full screen like the plan-limit pause — so there is nothing to
+        // refresh and nothing to navigate to. Repainting here would only
+        // overwrite that screen.
+        if (result !== false) hooks.refresh();
       });
+    }
+
+    // Leaves the failure screen and repaints the question the respondent was
+    // on, answers and all.
+    function retry() {
+      failed = null;
+      hooks.show(step);
     }
 
     function start() {
@@ -142,6 +186,9 @@
       get submitting() {
         return submitting;
       },
+      get failed() {
+        return failed;
+      },
       get timerPending() {
         return timer !== null;
       },
@@ -154,6 +201,7 @@
       pick,
       advance,
       submit,
+      retry,
       cancelPendingTimer: cancelTimer,
     };
   };

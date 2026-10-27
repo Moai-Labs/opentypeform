@@ -7,10 +7,12 @@
   const params = new URLSearchParams(location.search);
   const slug = params.get("form");
 
-  const el = (tag, cls, text) => {
+  // Builds an element: optional class, then any mix of child nodes, arrays
+  // of them, and text.
+  const el = (tag, cls, ...children) => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
-    if (text !== undefined) node.textContent = text;
+    node.append(...children.flat());
     return node;
   };
 
@@ -87,6 +89,9 @@
       published: Boolean(form.published),
       responseCount: form.responseCount || 0,
       questions: (form.questions || []).map((q) => ({ ...q })),
+      // Ids of questions removed this session; never handed out again, so a
+      // new question cannot inherit a deleted question's answers.
+      retired: new Set(),
     };
     render();
   }
@@ -240,6 +245,7 @@
     const del = el("button", "link danger", "Remove");
     del.type = "button";
     del.addEventListener("click", () => {
+      if (q.id) state.retired.add(q.id);
       state.questions.splice(i, 1);
       render();
     });
@@ -248,20 +254,31 @@
     return card;
   }
 
-  // Assign stable, server-safe ids: existing questions keep theirs, new ones
-  // get the first free qN.
+  // Assign stable, server-safe ids. Every question that already has an id
+  // keeps it, wherever it sits in the list; new ones get the first free qN.
+  // Retired ids — questions removed this session — stay reserved, so ids are
+  // never reused for an unrelated question and old answers can never be
+  // silently attached to a different question.
   function withIds(questions) {
-    const assigned = new Set();
+    const present = new Set();
+    for (const q of questions) {
+      const id = (q.id || "").trim();
+      if (id) present.add(id);
+    }
+    const reserved = new Set([...present, ...state.retired]);
     let n = 0;
+    const fresh = () => {
+      do {
+        n += 1;
+      } while (reserved.has(`q${n}`));
+      reserved.add(`q${n}`);
+      return `q${n}`;
+    };
+    const seen = new Set();
     return questions.map((q) => {
       let id = (q.id || "").trim();
-      if (!id || assigned.has(id)) {
-        do {
-          n += 1;
-          id = `q${n}`;
-        } while (assigned.has(id));
-      }
-      assigned.add(id);
+      if (!id || seen.has(id)) id = fresh();
+      seen.add(id);
       const out = { id, type: q.type, label: q.label, required: Boolean(q.required) };
       if (q.type === "choice") out.options = (q.options || []).map((o) => o.trim()).filter(Boolean);
       if (q.type === "text" && q.multiline) out.multiline = true;
@@ -291,6 +308,14 @@
         location.href = `/builder?form=${encodeURIComponent(state.slug)}`;
         return;
       }
+      // Hydrate the editor from the server's copy: the ids it assigned are
+      // now the truth, so further edits build on the saved ids instead of
+      // re-deriving them.
+      if (Array.isArray(r.body.questions)) {
+        state.questions = r.body.questions.map((q) => ({ ...q }));
+      }
+      state.published = Boolean(r.body.published);
+      render();
       renderSaved();
       return;
     }
