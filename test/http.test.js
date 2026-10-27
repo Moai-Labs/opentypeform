@@ -351,3 +351,106 @@ test("answers stay exported and identifiable after their question is removed", a
   assert.match(csv, /5000/);
   server.close();
 });
+
+test("concurrent submissions race for the last free response and exactly one wins", async () => {
+  const dir = tmpDir();
+  const app = await start(dir, 0n);
+  try {
+    const a = await signUp(app.base, "owner@example.com", "longenough1");
+    const token = a.token;
+    const created = await post(
+      app.base,
+      "/api/forms",
+      {
+        title: "Raced",
+        questions: [{ id: "q1", type: "text", label: "Name", required: true }],
+        published: true,
+      },
+      token,
+    );
+    const form = await created.json();
+
+    // Fill all but one of the free month's 25 responses.
+    for (let i = 1; i <= 24; i++) {
+      const r = await post(app.base, `/api/forms/${form.slug}/responses`, { answers: { q1: `person ${i}` } });
+      assert.equal(r.status, 201, `submission ${i}`);
+    }
+
+    // Two submissions race for the one remaining slot: the check must not
+    // pass for both before either response is written.
+    const racers = await Promise.all([
+      post(app.base, `/api/forms/${form.slug}/responses`, { answers: { q1: "racer one" } }),
+      post(app.base, `/api/forms/${form.slug}/responses`, { answers: { q1: "racer two" } }),
+    ]);
+    const statuses = racers.map((r) => r.status).sort();
+    assert.deepEqual(statuses, [201, 402], "exactly one submission is stored");
+
+    // The month is full: usage says 25 and the cap holds.
+    const used = await getJson(app.base, "/api/me", token);
+    assert.equal(used.body.plan.used, 25);
+    assert.equal((await post(app.base, `/api/forms/${form.slug}/responses`, { answers: { q1: "late" } })).status, 402);
+  } finally {
+    await app.close();
+  }
+});
+
+test("deleting a form does not restore the month's allowance, even after a restart", async () => {
+  const dir = tmpDir();
+  const app = await start(dir, 0n);
+  let token;
+  try {
+    const a = await signUp(app.base, "owner@example.com", "longenough1");
+    token = a.token;
+    const created = await post(
+      app.base,
+      "/api/forms",
+      {
+        title: "Ephemeral",
+        questions: [{ id: "q1", type: "text", label: "Name", required: true }],
+        published: true,
+      },
+      token,
+    );
+    const form = await created.json();
+    for (let i = 1; i <= 25; i++) {
+      const r = await post(app.base, `/api/forms/${form.slug}/responses`, { answers: { q1: `person ${i}` } });
+      assert.equal(r.status, 201, `submission ${i}`);
+    }
+
+    // The evasion: delete the form and its responses, then start over.
+    const removed = await fetch(`${app.base}/api/forms/${form.slug}`, {
+      method: "DELETE",
+      headers: bearer(token),
+    });
+    assert.equal(removed.status, 204);
+    const fresh = await post(
+      app.base,
+      "/api/forms",
+      {
+        title: "Second wind",
+        questions: [{ id: "q1", type: "text", label: "Name", required: true }],
+        published: true,
+      },
+      token,
+    );
+    const freshForm = await fresh.json();
+    const evading = await post(app.base, `/api/forms/${freshForm.slug}/responses`, { answers: { q1: "reset?" } });
+    assert.equal(evading.status, 402, "the month's usage survived the deletion");
+  } finally {
+    await app.close();
+  }
+
+  // And it survives a restart, too.
+  const after = await start(dir, 0n);
+  try {
+    const me = await getJson(after.base, "/api/me", token);
+    assert.equal(me.body.plan.used, 25, "usage restores from its own record");
+    const forms = await getJson(after.base, "/api/forms", token);
+    const freshForm = forms.body.find((f) => f.title === "Second wind");
+    assert.ok(freshForm, "the fresh form is still there");
+    const evading = await post(after.base, `/api/forms/${freshForm.slug}/responses`, { answers: { q1: "reset?" } });
+    assert.equal(evading.status, 402, "still paused after the restart");
+  } finally {
+    await after.close();
+  }
+});

@@ -94,3 +94,63 @@ test("deleting every form does not bring the template back on restart", () => {
   assert.equal(seedIfNeeded(second), null, "an initialized empty store stays empty");
   assert.equal(second.listForms().length, 0);
 });
+
+test("monthly usage is charged on acceptance and survives deleting its form", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "f", title: "F", ownerAccountId: "acc1", published: true, questions: [] });
+
+  // No usage has been charged yet, and nothing derived is remembered.
+  assert.equal(store.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 0);
+
+  // Two accepted responses charge two.
+  store.chargeMonthly("acc1", "2026-10");
+  store.chargeMonthly("acc1", "2026-10");
+  assert.equal(store.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2);
+
+  // Deleting the form and its responses does not restore the allowance.
+  store.deleteForm("f");
+  assert.equal(store.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2);
+
+  // A restart keeps the charged count.
+  const second = new Store(dir);
+  assert.equal(second.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2);
+
+  // A new month expires the old count.
+  assert.equal(second.monthlyUsage("acc1", "2026-11", "2026-11-01T00:00:00.000Z"), 0);
+});
+
+test("usage migrates from responses a store collected before it kept usage", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  // A store from before usage.json existed: responses on disk, no usage
+  // record. The derived count is the truth and must still enforce.
+  store.addForm({ slug: "f", title: "F", ownerAccountId: "acc1", published: true, questions: [] });
+  store.addResponse({ id: "r1", formSlug: "f", answers: { q1: "a" }, submittedAt: "2026-10-14T10:00:00.000Z" });
+  store.addResponse({ id: "r2", formSlug: "f", answers: { q1: "b" }, submittedAt: "2026-10-15T10:00:00.000Z" });
+  store.addResponse({ id: "r3", formSlug: "f", answers: { q1: "c" }, submittedAt: "2026-09-30T23:59:59.000Z" });
+  delete store.usage; // pretend the record never existed
+  store.loadUsage();
+
+  assert.equal(store.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2, "only this month's responses count");
+
+  // A restart over the same directory derives the same count again.
+  const second = new Store(dir);
+  assert.equal(second.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2);
+});
+
+test("a crash between the response write and the usage write heals, not undercounts", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "f", title: "F", ownerAccountId: "acc1", published: true, questions: [] });
+
+  // One response was accepted and charged; the next one got its response
+  // written but the usage write for it was lost in a crash.
+  store.chargeMonthly("acc1", "2026-10");
+  store.addResponse({ id: "r1", formSlug: "f", answers: { q1: "a" }, submittedAt: "2026-10-14T10:00:00.000Z" });
+  store.addResponse({ id: "r2", formSlug: "f", answers: { q1: "b" }, submittedAt: "2026-10-15T10:00:00.000Z" });
+  store.usage.acc1 = { month: "2026-10", count: 1 };
+  store.saveUsage();
+
+  assert.equal(store.monthlyUsage("acc1", "2026-10", "2026-10-01T00:00:00.000Z"), 2, "the derived count fills the gap");
+});

@@ -254,3 +254,27 @@ test("a network failure parks the flow on a retry screen until retried", async (
   assert.equal(flow.step, 2, "back on the last question");
   assert.equal(log.shows.at(-1), 2);
 });
+test("a mid-conversation pause owns the screen: nothing repaints over it", async () => {
+  // The runner renders the plan-limit pause screen itself and resolves the
+  // submit hook with false; the flow must leave that screen alone — no
+  // refresh, no navigation, no error park.
+  const { flow, log } = wired(form(), { stored: false });
+  flow.start();
+  flow.goTo(0);
+  flow.pick("q1", "A");
+  await sleep(10);
+  flow.setAnswer("q2", "Ada");
+  flow.advance();
+  flow.pick("q3", 5);
+  await sleep(10);
+  assert.equal(log.submits, 1);
+
+  const showsBefore = log.shows.length;
+  const refreshesBefore = log.refreshes;
+  await sleep(10);
+
+  assert.equal(log.refreshes, refreshesBefore, "the pause screen is not refreshed away");
+  assert.equal(log.shows.length, showsBefore, "the flow does not navigate either");
+  assert.equal(flow.completed, false, "the conversation did not complete");
+  assert.equal(flow.failed, null, "a pause is not a retry-screen error");
+});

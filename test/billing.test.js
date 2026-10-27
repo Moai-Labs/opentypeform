@@ -117,3 +117,35 @@ test("every payment address belongs to a key the product can re-derive", () => {
   assert.equal(reloaded.recordFor("acct-1").address, details.address, "the address survives a restart");
   assert.equal(addressForPrivateKey(reloaded.recordFor("acct-1").privateKey), details.address);
 });
+
+test("a payment record saved with a leading-zero key restores instead of vanishing", () => {
+  // Older versions saved node's minimal hex, which drops leading zero bytes.
+  // Such a record must survive the restart with its address and credit.
+  const dir = tmpDir();
+  const billing = new Billing(dir);
+  const keys = billing.paymentDetails("acct-zero");
+  // Force a scalar with a leading zero byte and re-save it the old way.
+  const scalar = 0x00ff0000000000000000000000000000000000000000000000000000000000abn;
+  const oldStyleKey = scalar.toString(16); // 63 hex characters, no padding
+  const address = addressForPrivateKey(oldStyleKey);
+  assert.ok(address, "the short encoding derives");
+  fs.writeFileSync(
+    path.join(dir, "billing.json"),
+    JSON.stringify({
+      "acct-zero": {
+        privateKey: oldStyleKey,
+        address,
+        creditedUnits: PRICE_UNITS.toString(),
+        paidUntil: new Date("2026-12-31T00:00:00Z").toISOString(),
+        createdAt: keys.createdAt,
+      },
+    }),
+  );
+
+  // A restart: the record is re-derived, kept, and the plan it bought stands.
+  const restored = new Billing(dir);
+  const rec = restored.recordFor("acct-zero");
+  assert.ok(rec, "the record is not dropped");
+  assert.equal(rec.address, address);
+  assert.equal(restored.plan("acct-zero", 0).tier, "paid", "the paid entitlement survives");
+});

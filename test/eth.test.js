@@ -26,3 +26,22 @@ test("a malformed private key yields no address, not a crash", () => {
   assert.equal(addressForPrivateKey("zz"), null);
   assert.equal(addressForPrivateKey(""), null);
 });
+
+test("a scalar with leading zero bytes derives the same address however it is written", () => {
+  // The scalar 1 written short (as older versions of newReceivingKeys saved
+  // it) and written zero-padded are the same key.
+  assert.equal(addressForPrivateKey("1"), addressForPrivateKey("0".repeat(63) + "1"));
+  // A 31-byte key (one leading zero byte) is still a valid scalar.
+  const keys = newReceivingKeys();
+  const scalar = BigInt("0x" + keys.privateKey) & ((1n << 248n) - 1n);
+  const short = scalar.toString(16).padStart(62, "0");
+  assert.equal(addressForPrivateKey(short), addressForPrivateKey(short.padStart(64, "0")));
+  assert.notEqual(addressForPrivateKey(short), null);
+});
+
+test("a generated private key is always stored as 64 hex characters", () => {
+  for (let i = 0; i < 20; i++) {
+    const keys = newReceivingKeys();
+    assert.match(keys.privateKey, /^[0-9a-f]{64}$/, `key ${i} is zero-padded hex`);
+  }
+});

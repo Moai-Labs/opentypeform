@@ -164,8 +164,9 @@ function createDocument() {
 // Runs a page script (builder.js / dashboard.js) in a sandbox with the given
 // document, location and fetch stub, plus the other globals they touch.
 // `preludes` are extra sources (e.g. columns.js) evaluated first, exactly as
-// the page's <script> tags order them.
-function runPage(source, { document, fetch, location, confirm, preludes = [] }) {
+// the page's <script> tags order them. `timers` replaces setTimeout and
+// clearTimeout with controllable fakes for pages that poll.
+function runPage(source, { document, fetch, location, confirm, preludes = [], timers = {} }) {
   const vm = require("node:vm");
   const sandbox = {
     document,
@@ -175,8 +176,8 @@ function runPage(source, { document, fetch, location, confirm, preludes = [] }) 
     window: { open() {} },
     confirm: confirm || (() => true),
     URLSearchParams,
-    setTimeout,
-    clearTimeout,
+    setTimeout: timers.setTimeout || setTimeout,
+    clearTimeout: timers.clearTimeout || clearTimeout,
     console,
   };
   sandbox.self = sandbox;
