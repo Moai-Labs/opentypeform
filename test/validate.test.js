@@ -3,7 +3,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizeDefinition, answerError, validateAnswers } = require("../lib/validate");
+const { normalizeDefinition, normalizeUpdate, answerError, validateAnswers } = require("../lib/validate");
 const { slugify } = require("../lib/app");
 
 const q = (over) => ({ id: "q1", type: "text", label: "Name?", ...over });
@@ -55,6 +55,69 @@ test("slugify and uniqueness", () => {
   assert.equal(result.form.slug, "demo-3");
 });
 
+test("question ids that would collide with object internals are rejected", () => {
+  const bad = ["__proto__", "CONSTRUCTOR", "prototype", "a b", "x".repeat(65)];
+  for (const id of bad) {
+    const result = normalizeDefinition({ title: "T", questions: [q({ id })] }, slugify, () => false);
+    assert.match(result.error, /id must be/, `id "${id.slice(0, 20)}" must be rejected`);
+  }
+  const good = normalizeDefinition({ title: "T", questions: [q({ id: "budget-2026_Q1" })] }, slugify, () => false);
+  assert.equal(good.error, undefined);
+});
+
+test("numeric answers must be numbers or numeric strings, nothing else", () => {
+  const number = q({ type: "number", required: true });
+  assert.match(answerError(number, []), /number/, "an empty array is not a number");
+  assert.match(answerError(number, [5]), /number/, "a wrapped number is not a number");
+  assert.match(answerError(number, true), /number/, "a boolean is not a number");
+  assert.match(answerError(number, { v: 5 }), /number/, "an object is not a number");
+  assert.match(answerError(number, NaN), /number/);
+  assert.equal(answerError(number, 5), null);
+  assert.equal(answerError(number, "12.5"), null);
+
+  const rating = q({ type: "rating", max: 5 });
+  assert.match(answerError(rating, [3]), /between 1 and 5/);
+  assert.equal(answerError(rating, 3), null);
+
+  // A rejected answer never reaches the stored response.
+  const form = { questions: [number] };
+  const rejected = validateAnswers(form, { answers: { q1: [] } });
+  assert.ok(rejected.error);
+  const accepted = validateAnswers(form, { answers: { q1: "12" } });
+  assert.deepEqual({ ...accepted.answers }, { q1: 12 });
+});
+
+test("normalizeUpdate validates partial edits and never touches the slug", () => {
+  const current = {
+    slug: "weekly-check-in",
+    title: "Weekly Check-in",
+    description: "",
+    published: true,
+    questions: [q({})],
+  };
+  const titleOnly = normalizeUpdate({ title: "Renamed" });
+  assert.equal(titleOnly.error, undefined);
+  assert.deepEqual(Object.keys(titleOnly.fields), ["title", "updatedAt"]);
+
+  const reorder = normalizeUpdate({
+    questions: [q({ id: "q2", type: "email", label: "Email?" }), q({ id: "q1", type: "text", label: "Name?" })],
+  });
+  assert.equal(reorder.error, undefined);
+  assert.equal(reorder.fields.questions[0].id, "q2");
+
+  const publish = normalizeUpdate({ published: false });
+  assert.equal(publish.fields.published, false);
+
+  const noSlug = normalizeUpdate({ slug: "hijacked", title: "Renamed" });
+  assert.equal(noSlug.fields.slug, undefined, "the slug is identity");
+
+  assert.match(normalizeUpdate({}).error, /nothing to update/);
+  assert.match(normalizeUpdate({ title: "" }).error, /title/);
+  assert.match(normalizeUpdate({ questions: [] }).error, /questions/);
+  assert.match(normalizeUpdate({ questions: [q({ id: "__proto__" })] }).error, /id must be/);
+  assert.match(normalizeUpdate("nope").error, /JSON object/);
+});
+
 test("answerError covers required, email, number, choice and rating", () => {
   const text = q({ required: true });
   assert.match(answerError(text, ""), /required/);
@@ -89,10 +152,10 @@ test("validateAnswers rejects unknown question ids and returns the field", () =>
   const missing = validateAnswers(form, { answers: {} });
   assert.equal(missing.field, "q1");
   const good = validateAnswers(form, { answers: { q1: " hi " } });
-  assert.deepEqual(good.answers, { q1: "hi" });
+  assert.deepEqual({ ...good.answers }, { q1: "hi" });
   const optionalForm = { questions: [q({ required: false })] };
   assert.deepEqual(
-    validateAnswers(optionalForm, {}).answers,
+    { ...validateAnswers(optionalForm, {}).answers },
     {},
     "missing answers object is treated as empty",
   );

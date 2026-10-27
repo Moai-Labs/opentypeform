@@ -57,3 +57,27 @@ test("an empty store is seeded with the starting template once", () => {
   assert.equal(seedIfNeeded(second), null, "seeding must not duplicate on restart");
   assert.equal(second.listForms().length, 1);
 });
+
+test("deleting a form removes it and all of its responses", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "a", title: "A", published: true, questions: [] });
+  store.addForm({ slug: "b", title: "B", published: true, questions: [] });
+  store.addResponse({ id: "r1", formSlug: "a", answers: { q1: "x" }, submittedAt: "t" });
+  store.addResponse({ id: "r2", formSlug: "b", answers: { q1: "y" }, submittedAt: "t" });
+
+  assert.equal(store.countResponses("a"), 1);
+  assert.ok(store.deleteForm("a"));
+  assert.equal(store.getForm("a"), null);
+  assert.deepEqual(store.listResponses("a"), []);
+  assert.equal(store.countResponses("a"), 0);
+  assert.equal(store.countResponses("b"), 1, "other forms keep their responses");
+
+  // The deletion is durable.
+  const restarted = new Store(dir);
+  assert.equal(restarted.getForm("a"), null);
+  assert.equal(restarted.listResponses("a").length, 0);
+  assert.equal(restarted.countResponses("b"), 1);
+
+  assert.equal(store.deleteForm("a"), false, "deleting twice changes nothing");
+});
