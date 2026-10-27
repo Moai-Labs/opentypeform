@@ -497,3 +497,54 @@ test("static pages: home, dashboard, builder, health, unknown paths", async () =
   assert.equal((await fetch(`${base}/f/`)).status, 404);
   server.close();
 });
+test("answers stay exported and identifiable after their question is removed", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "History",
+      questions: [
+        { id: "q1", type: "text", label: "Name?", required: true },
+        { id: "q2", type: "number", label: "Budget?" },
+      ],
+      published: true,
+    }),
+  });
+  const form = await created.json();
+  const posted = await fetch(`${base}/api/forms/${form.slug}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ answers: { q1: "Ada", q2: 5000 } }),
+  });
+  assert.equal(posted.status, 201);
+
+  // The owner removes the budget question.
+  const updated = await fetch(`${base}/api/forms/${form.slug}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      questions: [{ id: "q1", type: "text", label: "Name?", required: true }],
+    }),
+  });
+  assert.equal(updated.status, 200);
+
+  // The response keeps the question schema it was collected under…
+  const responses = await (
+    await fetch(`${base}/api/forms/${form.slug}/responses`, { headers: bearer(token) })
+  ).json();
+  assert.equal(responses.length, 1);
+  assert.deepEqual(responses[0].schema, [
+    { id: "q1", label: "Name?" },
+    { id: "q2", label: "Budget?" },
+  ]);
+
+  // …and the export still carries the answer under its original label.
+  const csv = await (
+    await fetch(`${base}/api/forms/${form.slug}/responses.csv`, { headers: bearer(token) })
+  ).text();
+  assert.match(csv, /Budget\?/);
+  assert.match(csv, /5000/);
+  server.close();
+});
