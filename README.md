@@ -16,9 +16,10 @@ who hold its token.
 - **The builder** (`/builder`) — create a form blank or from the starting
   template; add, edit, reorder and remove questions; save; publish; copy the
   share link.
-- **A seeded starting template** — on the first boot of an empty store, a
-  ready-made "Client enquiry" form is created and published at `/f/enquiry`,
-  so a first form takes minutes, not an hour.
+- **A seeded starting template** — on first boot, a ready-made "Client
+  enquiry" form is created and published at `/f/enquiry`, so a first form
+  takes minutes, not an hour. It is seeded exactly once (marked durably), so
+  deleting every form does not bring it back on a restart.
 - **Durable storage** — form definitions and responses live as JSON files
   under `DATA_DIR` (default: a mounted `/data` volume when present, else
   `./data`; the Docker image defaults to `/data`). Every write goes through a
