@@ -131,3 +131,80 @@ test("an interruption between seeding and its marker cannot duplicate the templa
   assert.equal(seedIfNeeded(again), null);
   assert.equal(again.listForms().length, 1);
 });
+
+test("an intentionally emptied store that predates the marker is not re-seeded", () => {
+  const dir = tmpDir();
+  // A store from before the marker existed whose owner deleted every form:
+  // forms.json is on disk and empty, and no meta flag was ever written.
+  fs.writeFileSync(path.join(dir, "forms.json"), "[]\n");
+
+  const first = new Store(dir);
+  assert.equal(first.preexisting, true, "an existing forms.json marks the store pre-existing");
+  assert.equal(seedIfNeeded(first), null, "an existing empty store gets no template");
+  assert.equal(first.listForms().length, 0);
+  assert.equal(first.getMeta("seeded"), true, "the store is marked initialized");
+
+  // The decision is durable: a further restart neither seeds nor re-marks.
+  const second = new Store(dir);
+  assert.equal(seedIfNeeded(second), null);
+  assert.equal(second.listForms().length, 0);
+});
+
+test("a brand-new store is still recognized as new and seeded", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  assert.equal(store.preexisting, false, "no forms.json means a fresh store");
+  const seeded = seedIfNeeded(store);
+  assert.ok(seeded, "a fresh store is seeded");
+  assert.equal(seeded.slug, TEMPLATE_SLUG);
+});
+
+test("an interruption between the two writes of a deletion is finished on boot", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "a", title: "A", published: true, questions: [] });
+  store.addForm({ slug: "b", title: "B", published: true, questions: [] });
+  store.addResponse({ id: "r1", formSlug: "a", answers: { q1: "x" }, submittedAt: "t" });
+  store.addResponse({ id: "r2", formSlug: "b", answers: { q1: "y" }, submittedAt: "t" });
+
+  // Crash right after forms.json was rewritten: the deletion journal and
+  // the form-less forms file are on disk, but responses.json still holds
+  // every response, including form a's.
+  const crashing = new Store(dir);
+  crashing.saveResponses = () => {
+    throw new Error("crash between the two writes");
+  };
+  assert.throws(() => crashing.deleteForm("a"), /crash between the two writes/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "responses.json"), "utf8")).length, 2);
+  assert.ok(fs.existsSync(path.join(dir, "delete-journal.json")), "the deletion is journalled");
+
+  // The next boot finishes the interrupted deletion before anything else.
+  const restarted = new Store(dir);
+  assert.equal(restarted.getForm("a"), null);
+  assert.deepEqual(restarted.listResponses("a"), [], "no deleted response survives");
+  assert.equal(restarted.countResponses("b"), 1, "other forms keep their responses");
+  assert.ok(!fs.existsSync(path.join(dir, "delete-journal.json")), "the journal is cleared");
+
+  // Recreating the slug finds no old responses waiting under it.
+  restarted.addForm({ slug: "a", title: "A again", published: true, questions: [] });
+  assert.deepEqual(restarted.listResponses("a"), []);
+  assert.equal(restarted.countResponses("a"), 0);
+});
+
+test("an interruption before the first write of a deletion is finished on boot", () => {
+  const dir = tmpDir();
+  const store = new Store(dir);
+  store.addForm({ slug: "a", title: "A", published: true, questions: [] });
+  store.addResponse({ id: "r1", formSlug: "a", answers: { q1: "x" }, submittedAt: "t" });
+
+  // Crash after the journal landed but before either data file was written.
+  const crashing = new Store(dir);
+  crashing.saveForms = () => {
+    throw new Error("crash before the first write");
+  };
+  assert.throws(() => crashing.deleteForm("a"), /crash before the first write/);
+
+  const restarted = new Store(dir);
+  assert.equal(restarted.getForm("a"), null, "the journalled deletion is completed");
+  assert.deepEqual(restarted.listResponses("a"), []);
+});

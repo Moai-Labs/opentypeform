@@ -613,3 +613,226 @@ test("answers stay exported and identifiable after their question is removed", a
   assert.match(csv, /5000/);
   server.close();
 });
+
+// Sends a request whose body is deliberately paused halfway, so the server
+// sits inside readJsonBody while the test changes the store behind it.
+async function pausedRequest(base, method, path, token, payload) {
+  const url = new URL(base);
+  const socket = net.connect({ host: "127.0.0.1", port: Number(url.port) });
+  await once(socket, "connect");
+  socket.write(
+    `${method} ${path} HTTP/1.1\r\n` +
+      `host: 127.0.0.1\r\n` +
+      `authorization: Bearer ${token}\r\n` +
+      `content-type: application/json\r\n` +
+      `content-length: ${Buffer.byteLength(payload)}\r\n` +
+      `connection: close\r\n\r\n`,
+  );
+  socket.write(payload.slice(0, 10));
+  await new Promise((r) => setTimeout(r, 100));
+  return socket;
+}
+
+async function drain(socket) {
+  const chunks = [];
+  for await (const chunk of socket) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+const put = (token, body) => ({
+  method: "PUT",
+  headers: { "content-type": "application/json", ...bearer(token) },
+  body: JSON.stringify(body),
+});
+
+test("an update still in flight merges into the live form, not a stale copy", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Concurrent",
+      questions: [{ type: "text", label: "Name?" }],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+
+  // Open an update and pause it inside the body read.
+  const payload = JSON.stringify({ title: "Renamed while paused" });
+  const socket = await pausedRequest(base, "PUT", `/api/forms/${slug}`, token, payload);
+
+  // While the body is arriving, the owner unpublishes the form — a change
+  // the update's captured copy knew nothing about.
+  const unpublished = await fetch(`${base}/api/forms/${slug}`, put(token, { published: false }));
+  assert.equal(unpublished.status, 200);
+
+  // The late update lands, merged into the live definition.
+  socket.end(payload.slice(10));
+  const raw = await drain(socket);
+  assert.match(raw, /^HTTP\/1\.1 200/, "the late update succeeds");
+
+  const form = await (await fetch(`${base}/api/forms/${slug}`, { headers: bearer(token) })).json();
+  assert.equal(form.title, "Renamed while paused", "the late update is applied");
+  assert.equal(form.published, false, "the intervening unpublish is not undone");
+  server.close();
+});
+
+test("an update paused over a deleted form is rejected, not replayed onto a new form", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Doomed",
+      questions: [{ type: "text", label: "Name?" }],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+
+  // Deletion and recreation under the same slug, both while the update's
+  // body is still arriving: the pending update must not overwrite the
+  // replacement with the deleted form's definition.
+  const firstPayload = JSON.stringify({ title: "Doomed", questions: [{ type: "text", label: "Name?" }] });
+  const first = await pausedRequest(base, "PUT", `/api/forms/${slug}`, token, firstPayload);
+  const deleted = await fetch(`${base}/api/forms/${slug}`, { method: "DELETE", headers: bearer(token) });
+  assert.equal(deleted.status, 204);
+  const recreated = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Doomed",
+      questions: [{ type: "number", label: "Budget?" }],
+      published: true,
+    }),
+  });
+  assert.equal(recreated.status, 201);
+  first.end(firstPayload.slice(10));
+  assert.match(await drain(first), /^HTTP\/1\.1 409/, "recreation is a conflict, not a silent overwrite");
+
+  const replacement = await (await fetch(`${base}/api/forms/${slug}`, { headers: bearer(token) })).json();
+  assert.equal(replacement.questions[0].label, "Budget?", "the replacement keeps its own definition");
+  assert.equal(replacement.title, "Doomed");
+  assert.equal(replacement.published, true);
+
+  // Deletion alone: the paused update finds nothing to merge into.
+  const secondPayload = JSON.stringify({ title: "Late rename" });
+  const second = await pausedRequest(base, "PUT", `/api/forms/${slug}`, token, secondPayload);
+  const deletedAgain = await fetch(`${base}/api/forms/${slug}`, {
+    method: "DELETE",
+    headers: bearer(token),
+  });
+  assert.equal(deletedAgain.status, 204);
+  second.end(secondPayload.slice(10));
+  assert.match(await drain(second), /^HTTP\/1\.1 404/, "a deleted form is a 404, not an upsert");
+  server.close();
+});
+
+test("legacy answers without a schema keep their labels when the form is edited", async () => {
+  const dir = tmpDir();
+  const app = createApp({ dataDir: dir });
+  const { server, base } = await listen(app);
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "History",
+      questions: [
+        { id: "q1", type: "text", label: "Name?", required: true },
+        { id: "q2", type: "number", label: "Budget?" },
+      ],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+  const posted = await fetch(`${base}/api/forms/${slug}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ answers: { q1: "Ada", q2: 5000 } }),
+  });
+  assert.equal(posted.status, 201);
+
+  // Rewrite the stored response as one from before schemas existed.
+  for (const r of app.store.listResponses(slug)) delete r.schema;
+  app.store.saveResponses();
+
+  // The owner relabels q1 and removes q2 in one edit.
+  const updated = await fetch(`${base}/api/forms/${slug}`, put(token, {
+    questions: [{ id: "q1", type: "text", label: "Full name?", required: true }],
+  }));
+  assert.equal(updated.status, 200);
+
+  // The response was durably given the schema it was actually collected
+  // under — the pre-edit questions.
+  const responses = await (
+    await fetch(`${base}/api/forms/${slug}/responses`, { headers: bearer(token) })
+  ).json();
+  assert.deepEqual(responses[0].schema, [
+    { id: "q1", label: "Name?" },
+    { id: "q2", label: "Budget?" },
+  ]);
+
+  // The export keeps the original labels and answers, and the new label's
+  // column stays empty for the row collected before it existed.
+  const csv = await (
+    await fetch(`${base}/api/forms/${slug}/responses.csv`, { headers: bearer(token) })
+  ).text();
+  const lines = csv.split("\r\n");
+  assert.equal(lines[0], "submittedAt,Full name?,Name?,Budget?");
+  assert.match(lines[1], /,Ada,5000$/, "the answers sit under their original labels");
+  server.close();
+});
+
+test("answers whose question version no schema records still export", async () => {
+  const dir = tmpDir();
+  const app = createApp({ dataDir: dir });
+  const { server, base } = await listen(app);
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Orphans",
+      questions: [
+        { id: "q1", type: "text", label: "Name?", required: true },
+        { id: "q2", type: "number", label: "Budget?" },
+      ],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+  await fetch(`${base}/api/forms/${slug}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ answers: { q1: "Ada", q2: 5000 } }),
+  });
+
+  // Legacy state: no schema on the response, and a pre-migration edit that
+  // already removed q2 from the stored definition.
+  for (const r of app.store.listResponses(slug)) delete r.schema;
+  const form = app.store.getForm(slug);
+  app.store.replaceForm(slug, {
+    ...form,
+    questions: [{ id: "q1", type: "text", label: "Name?", required: true }],
+  });
+
+  // Now the owner edits the form through the API. The backfill can only
+  // attach the live (q2-less) schema, so the q2 answer is orphaned — and
+  // must still be exported, in a column of its own.
+  const updated = await fetch(`${base}/api/forms/${slug}`, put(token, {
+    questions: [{ id: "q1", type: "text", label: "Full name?", required: true }],
+  }));
+  assert.equal(updated.status, 200);
+
+  const csv = await (
+    await fetch(`${base}/api/forms/${slug}/responses.csv`, { headers: bearer(token) })
+  ).text();
+  const lines = csv.split("\r\n");
+  assert.equal(lines[0], "submittedAt,Full name?,Name?,q2", "the orphaned id gets its own column");
+  assert.match(lines[1], /,Ada,5000$/, "the orphaned answer is not dropped");
+  server.close();
+});
