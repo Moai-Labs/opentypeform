@@ -21,16 +21,21 @@ who hold its token.
 
 ## HTTP API
 
-Public:
+Public — no account, no token:
 
 - `GET /f/<slug>` — the runner page for a published form.
 - `GET /api/public/forms/<slug>` — the published definition (never includes responses).
 - `POST /api/forms/<slug>/responses` — submit answers, `{ "answers": { <questionId>: value } }`.
 
-Owner API (unauthenticated until private accounts land; rate-limited meanwhile):
+Owner API — holds form definitions and every respondent's answers, so it is
+never public. It requires `Authorization: Bearer <ADMIN_TOKEN>`; when the
+`ADMIN_TOKEN` environment variable is not set, the owner endpoints are
+switched off (503) and the deployment collects responses only:
 
 - `GET /api/forms`, `GET /api/forms/<slug>`, `POST /api/forms`
 - `GET /api/forms/<slug>/responses`
+
+Form creation is additionally rate-limited.
 
 ## Running
 

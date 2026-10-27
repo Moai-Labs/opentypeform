@@ -8,8 +8,16 @@
   const slug = location.pathname.split("/").pop();
   let form = null;
   let step = -1; // -1 = welcome, 0..n-1 = questions, n = done
-  const answers = {};
-  const errors = {};
+  // Null-prototype dictionaries: question ids come from the form definition,
+  // so a stray "__proto__" must never reach an inherited property.
+  const answers = Object.create(null);
+  const errors = Object.create(null);
+  // Auto-advance state: the pending timer, the question that scheduled it, and
+  // guards so a submission can happen once and stale callbacks do nothing.
+  let advanceTimer = null;
+  let advanceStep = -1;
+  let submitting = false;
+  let completed = false;
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -33,6 +41,7 @@
     });
 
   function showWelcome() {
+    cancelAdvance();
     step = -1;
     setProgress(0);
     app.replaceChildren(
@@ -46,6 +55,8 @@
   }
 
   function showStep(i) {
+    if (completed) return; // nothing may move the form after the success screen
+    cancelAdvance();
     step = i;
     const q = form.questions[i];
     setProgress(i / form.questions.length);
@@ -77,7 +88,7 @@
           answers[q.id] = opt;
           delete errors[q.id];
           render();
-          setTimeout(next, 250);
+          scheduleAdvance(step);
         });
         label.append(radio, el("span", null, opt));
         list.append(label);
@@ -97,7 +108,7 @@
           answers[q.id] = v;
           delete errors[q.id];
           render();
-          setTimeout(next, 250);
+          scheduleAdvance(step);
         });
         row.append(btn);
       }
@@ -150,6 +161,8 @@
 
   function render() {
     // Re-render the current question so choice/rating selections repaint.
+    // showStep cancels any pending auto-advance and reschedules none, so a
+    // repaint never leaves a stale timer behind.
     if (step >= 0 && step < form.questions.length) showStep(step);
   }
 
@@ -157,9 +170,34 @@
     bar.style.width = `${Math.round(fraction * 100)}%`;
   }
 
+  // Auto-advance 250 ms after a choice/rating selection. The timer remembers
+  // which question scheduled it and is cancelled the moment the form moves, so
+  // rapid selections and manual navigation can never leave a callback that
+  // acts on the wrong question.
+  function scheduleAdvance(fromStep) {
+    cancelAdvance();
+    advanceStep = fromStep;
+    advanceTimer = setTimeout(() => {
+      advanceTimer = null;
+      if (submitting || completed) return;
+      if (step !== advanceStep) return;
+      next();
+    }, 250);
+  }
+
+  function cancelAdvance() {
+    if (advanceTimer !== null) {
+      clearTimeout(advanceTimer);
+      advanceTimer = null;
+    }
+    advanceStep = -1;
+  }
+
   function next() {
+    if (submitting || completed) return;
     const q = form.questions[step];
-    const value = answers[q.id];
+    if (!q) return;
+    const value = Object.hasOwn(answers, q.id) ? answers[q.id] : undefined;
     const empty = value === undefined || value === null || String(value).trim() === "";
     if (empty && q.required) {
       errors[q.id] = "This question is required.";
@@ -185,11 +223,16 @@
   }
 
   async function submit() {
+    // One submission in flight, one ever completed: stale timers or double
+    // clicks on the last question cannot post the same response twice.
+    if (submitting || completed) return;
+    submitting = true;
+    cancelAdvance();
     setProgress(1);
     app.replaceChildren(el("p", "muted", "Sending…"));
     const cleaned = {};
     for (const q of form.questions) {
-      const v = answers[q.id];
+      const v = Object.hasOwn(answers, q.id) ? answers[q.id] : undefined;
       if (v !== undefined && String(v).trim() !== "") cleaned[q.id] = String(v).trim();
     }
     try {
@@ -199,6 +242,7 @@
         body: JSON.stringify({ answers: cleaned }),
       });
       if (!r.ok) {
+        submitting = false;
         const body = await r.json().catch(() => ({}));
         if (r.status === 400 && body.field) errors[body.field] = body.error;
         if (body.field) {
@@ -207,8 +251,10 @@
         }
         return renderError(body.error || "Something went wrong. Please try again.");
       }
+      completed = true;
       showDone();
     } catch {
+      submitting = false;
       renderError("Network error. Please try again.");
     }
   }
@@ -222,7 +268,7 @@
   }
 
   function showDone() {
-    setProgress(100);
+    setProgress(1);
     app.replaceChildren(
       el("h1", null, "Thank you!"),
       el("p", "muted", "Your response has been recorded."),
