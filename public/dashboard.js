@@ -1,10 +1,14 @@
-// The owner dashboard: set up the owner token on first run, then list forms
-// with their response counts, show a form's responses, export them as CSV,
-// publish/unpublish, and delete. Plain JavaScript, no build step.
+// The owner dashboard: list forms with their response counts, show a form's
+// responses, export them as CSV, publish/unpublish, and delete. Plain
+// JavaScript, no build step.
+//
+// Sign-in lives on /login; this page just bounces there when the session is
+// gone and keeps the plan state (usage, limits) visible.
 "use strict";
 
 (function () {
   const app = document.getElementById("app");
+  const header = document.querySelector("header.owner-header nav");
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -29,107 +33,51 @@
   init();
 
   async function init() {
-    const status = await api("/api/owner/status");
-    if (!status.body || !status.body.configured) return renderClaim();
+    const me = await api("/api/me");
+    if (me.status !== 200) return (location.href = "/login");
+    renderHeader(me.body);
     const forms = await api("/api/forms");
-    if (forms.status === 200) return renderList(forms.body);
-    renderLogin();
+    if (forms.status === 200) return renderList(forms.body, me.body);
+    if (forms.status === 401) return (location.href = "/login");
+    app.replaceChildren(el("p", "muted", "Something went wrong loading your forms."));
   }
 
-  // --- first run: exactly one owner token may claim this deployment ---
-
-  function renderClaim() {
-    const input = el("input");
-    input.placeholder = "Or type your own passphrase (8+ characters)";
-    const hint = el("p", "muted", "This deployment has no owner yet. The first person to claim it manages its forms — the token stays in this browser.");
-    const error = el("p", "error");
-    const claimBtn = el("button", "primary", "Generate an owner token");
-    claimBtn.type = "button";
-    claimBtn.addEventListener("click", async () => {
-      const r = await api("/api/owner/claim", json("POST", {}));
-      if (r.status !== 201) {
-        error.textContent = r.body.error || "Claiming failed.";
-        return;
-      }
-      showGeneratedToken(r.body.token);
-    });
-    const ownBtn = el("button", "secondary", "Claim with my own token");
-    ownBtn.type = "button";
-    ownBtn.addEventListener("click", async () => {
-      const r = await api("/api/owner/claim", json("POST", { token: input.value }));
-      if (r.status !== 201) {
-        error.textContent = r.body.error || "Claiming failed.";
-        return;
-      }
-      load();
-    });
-    app.replaceChildren(
-      el("h1", null, "Set up your dashboard"),
-      hint,
-      claimBtn,
-      el("p", "muted", "— or —"),
-      input,
-      ownBtn,
-      error,
-    );
-  }
-
-  function showGeneratedToken(token) {
-    const code = el("code", "token", token);
-    const copy = el("button", "secondary", "Copy");
-    copy.type = "button";
-    copy.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(token);
-        copy.textContent = "Copied";
-      } catch {
-        copy.textContent = "Select and copy";
-      }
-    });
-    const cont = el("button", "primary", "Continue to the dashboard");
-    cont.type = "button";
-    cont.addEventListener("click", load);
-    app.replaceChildren(
-      el("h1", null, "Your owner token"),
-      el("p", "muted", "Save this somewhere safe — it is shown once and is the key to this dashboard from other browsers."),
-      code,
-      copy,
-      cont,
-    );
-  }
-
-  function renderLogin() {
-    const input = el("input");
-    input.placeholder = "Owner token";
-    const error = el("p", "error");
-    const btn = el("button", "primary", "Open dashboard");
-    btn.type = "button";
-    btn.addEventListener("click", async () => {
-      const r = await api("/api/owner/login", json("POST", { token: input.value }));
-      if (r.status !== 200) {
-        error.textContent = "That token does not match this deployment.";
-        return;
-      }
-      load();
-    });
-    app.replaceChildren(
-      el("h1", null, "Owner sign-in"),
-      el("p", "muted", "Enter the owner token for this deployment."),
-      input,
-      btn,
-      error,
+  // The header carries the account: email, plan, usage, and the way out.
+  function renderHeader(me) {
+    header.replaceChildren(
+      el("span", "muted small", `${me.email} · ${me.plan.tier === "paid" ? "Pro" : "Free"} · ${me.plan.used}/${me.plan.limit} this month`),
+      (() => {
+        const a = el("a", null, me.plan.tier === "paid" ? "Billing" : "Upgrade — $9/mo");
+        a.href = "/billing";
+        return a;
+      })(),
+      (() => {
+        const out = el("a", null, "Sign out");
+        out.href = "#";
+        out.addEventListener("click", async (e) => {
+          e.preventDefault();
+          await fetch("/api/auth/logout", { method: "POST" });
+          location.href = "/login";
+        });
+        return out;
+      })(),
     );
   }
 
   // --- the form list ---
 
   async function load() {
+    const me = await api("/api/me");
+    if (me.status !== 200) return (location.href = "/login");
+    renderHeader(me.body);
     const forms = await api("/api/forms");
-    if (forms.status === 200) renderList(forms.body);
-    else renderLogin();
+    if (forms.status === 200) renderList(forms.body, me.body);
+    else location.href = "/login";
   }
 
-  function renderList(forms) {
+  function renderList(forms, me) {
+    const paused = me.plan.used >= me.plan.limit;
+
     const rows = forms.map((f) => {
       const row = el("tr");
       const title = el("td");
@@ -186,8 +134,19 @@
     newBtn.type = "button";
     newBtn.addEventListener("click", () => (location.href = "/builder"));
 
+    const pausedNote = paused
+      ? el(
+          "p",
+          "error",
+          me.plan.tier === "paid"
+            ? `You have used all ${me.plan.limit} responses of the Pro plan this month. Collection is paused until the next payment or next month.`
+            : `Collection is paused — you have used all ${me.plan.limit} free responses this month. Upgrade to Pro ($${me.plan.priceUsdc}/month) on the billing page to lift the limit immediately.`,
+        )
+      : null;
+
     app.replaceChildren(
       el("div", "list-head", el("h1", null, "Your forms"), newBtn),
+      pausedNote,
       forms.length ? table : el("p", "muted", "No forms yet. Create one — the starting template takes a minute."),
     );
   }
@@ -198,7 +157,7 @@
     const detail = await api(`/api/forms/${encodeURIComponent(slug)}`);
     const listed = await api(`/api/forms/${encodeURIComponent(slug)}/responses`);
     if (detail.status !== 200 || listed.status !== 200) {
-      if (detail.status === 401 || listed.status === 401) return renderLogin();
+      if (detail.status === 401 || listed.status === 401) return (location.href = "/login");
       app.replaceChildren(el("p", "muted", "That form no longer exists."));
       return;
     }

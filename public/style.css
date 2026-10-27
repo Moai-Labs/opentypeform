@@ -295,3 +295,56 @@ td.actions { white-space: nowrap; }
 .toolbar input:not([type="checkbox"]):not([type="radio"]) { width: auto; margin: 0; }
 .qhead input:not([type="checkbox"]) { flex: 1; width: auto; min-width: 10rem; margin: 0; }
 .qcard > input, .qcard > textarea { width: 100%; margin: 0; }
+
+/* --- accounts: sign-in page --- */
+
+.auth-main { max-width: 24rem; }
+.auth-form { display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1rem; }
+.auth-form h1 { margin: 0; }
+.auth-form button.primary { align-self: flex-start; }
+
+/* --- billing: plans and the payment panel --- */
+
+.usage { margin: 0.5rem 0 0; font-variant-numeric: tabular-nums; }
+
+.plans { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+.plan-card {
+  flex: 1;
+  min-width: 16rem;
+  padding: 1rem;
+  background: #fff;
+  border: 2px solid #d9d9e3;
+  border-radius: 10px;
+}
+.plan-card.current { border-color: #4f46e5; }
+.plan-head { display: flex; align-items: baseline; gap: 0.6rem; }
+.plan-price { color: #4f46e5; font-weight: 700; }
+.plan-head .pill { margin-left: auto; }
+.plan-card ul { margin: 0.6rem 0 0.2rem; padding-left: 1.1rem; color: #55556b; line-height: 1.6; }
+
+.pay-panel {
+  margin-top: 1.5rem;
+  padding: 1.2rem;
+  background: #fff;
+  border: 2px solid #d9d9e3;
+  border-radius: 10px;
+}
+.test-note {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  background: #fff7e6;
+  border: 2px solid #f0c14b;
+  border-radius: 10px;
+  color: #7a5d00;
+  font-weight: 600;
+}
+.pay-row { margin: 0.4rem 0; }
+.pay-label {
+  display: inline-block;
+  min-width: 6rem;
+  color: #6d6d80;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pay-address { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }

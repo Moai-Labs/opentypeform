@@ -22,12 +22,19 @@
       if (!r.ok) throw new Error("not found");
       form = await r.json();
       document.title = form.title;
+      // A paid plan takes the badge off; the free tier keeps it.
+      if (form.branding && form.branding.powered === false) {
+        document.getElementById("footer").remove();
+      }
       flow = createFlow(form, {
         show: showStep,
         refresh: () => showStep(flow.step),
         submit,
         done: showDone,
       });
+      // Over the plan's monthly limit, collection pauses: say so instead of
+      // starting a conversation that cannot end in a stored answer.
+      if (form.paused) return showPaused();
       flow.start();
     })
     .catch(() => {
@@ -155,6 +162,12 @@
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
+        // The plan's monthly limit was hit mid-conversation: collection just
+        // paused, so the pause screen takes over.
+        if (r.status === 402 && body.code === "plan_limit") {
+          showPaused();
+          return false;
+        }
         if (body.field) {
           flow.errors[body.field] = body.error || "Please check this answer.";
           const i = form.questions.findIndex((q) => q.id === body.field);
@@ -167,6 +180,20 @@
     } catch {
       return renderRetry("Network error. Please try again.");
     }
+  }
+
+  // Collection paused over the plan's limit. Once shown, it stays: there is
+  // nothing to continue to until the owner pays or the month rolls over.
+  function showPaused() {
+    setProgress(0);
+    app.replaceChildren(
+      el("h1", null, "This form is paused"),
+      el(
+        "p",
+        "muted",
+        "It has reached its response limit for this month, so it is not collecting new answers right now. Please try again later.",
+      ),
+    );
   }
 
   // A network or server failure is not a validation error on one question;
