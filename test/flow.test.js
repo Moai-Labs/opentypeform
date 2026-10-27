@@ -21,7 +21,7 @@ const form = () => ({
 // (0 by default), or rejects nothing: it returns a promise like the real
 // runner's fetch does.
 function wired(f, { autoAdvanceMs = 5, submitMs = 0, stored = true } = {}) {
-  const log = { shows: [], refreshes: 0, submits: 0, done: 0 };
+  const log = { shows: [], refreshes: 0, submits: 0, done: 0, errors: [] };
   let resolveSubmit = null;
   const flow = createFlow(f, {
     show: (step) => log.shows.push(step),
@@ -36,6 +36,7 @@ function wired(f, { autoAdvanceMs = 5, submitMs = 0, stored = true } = {}) {
       });
     },
     done: () => (log.done += 1),
+    error: (message) => log.errors.push(message),
   }, { autoAdvanceMs });
   return { flow, log, flush: () => resolveSubmit && resolveSubmit() };
 }
@@ -193,4 +194,63 @@ test("collect trims strings and drops empty answers", () => {
   flow.advance();
   flow.submit();
   assert.deepEqual({ ...log.lastCleaned }, { q1: "A", q2: "Ada" });
+});
+
+test("a server-rejected earlier question is navigated to and stays on screen", async () => {
+  const { flow, log, flush } = wired(form(), {
+    stored: { field: "q1", message: "Answer is too long (max 2000 characters)." },
+  });
+  flow.start();
+  flow.goTo(0);
+  flow.pick("q1", "A");
+  await sleep(10);
+  flow.setAnswer("q2", "Ada");
+  flow.advance();
+  flow.pick("q3", 5);
+  await sleep(10);
+  assert.equal(log.submits, 1);
+  flush();
+  await sleep(10);
+
+  // The flow unlocked, moved to the rejected question, and kept its error.
+  assert.equal(flow.step, 0, "the rejected question is showing");
+  assert.equal(log.shows.at(-1), 0);
+  assert.equal(flow.errors.q1, "Answer is too long (max 2000 characters).");
+  assert.equal(flow.completed, false);
+  assert.equal(log.done, 0);
+
+  // Correcting the answer and resubmitting goes back out.
+  flow.setAnswer("q1", "B");
+  flow.advance();
+  flow.setAnswer("q2", "Ada");
+  flow.advance();
+  flow.pick("q3", 4);
+  await sleep(20);
+  assert.equal(log.submits, 2, "the retry goes out");
+});
+
+test("a network failure parks the flow on a retry screen until retried", async () => {
+  const { flow, log, flush } = wired(form(), {
+    stored: { error: "Network error. Please try again." },
+  });
+  flow.start();
+  flow.goTo(0);
+  flow.pick("q1", "A");
+  await sleep(10);
+  flow.setAnswer("q2", "Ada");
+  flow.advance();
+  flow.pick("q3", 5);
+  await sleep(10);
+  flush();
+  await sleep(10);
+
+  assert.equal(flow.failed, "Network error. Please try again.");
+  assert.deepEqual(log.errors, ["Network error. Please try again."], "the error screen is showing");
+  assert.equal(flow.completed, false);
+
+  // Retrying returns to the question the respondent was on.
+  flow.retry();
+  assert.equal(flow.failed, null);
+  assert.equal(flow.step, 2, "back on the last question");
+  assert.equal(log.shows.at(-1), 2);
 });
