@@ -7,6 +7,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
+const net = require("node:net");
+const { once } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -364,6 +366,69 @@ test("deleting a form removes it and every response it collected", async () => {
   const after = await (await fetch(`${second.base}/api/forms`, { headers: bearer(token) })).json();
   assert.ok(!after.some((f) => f.slug === slug));
   await second.close();
+});
+
+test("a submission still in flight cannot outlive its deleted form", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir() }));
+  const token = await claim(base);
+  const created = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Vanishing",
+      questions: [{ type: "text", label: "Name?" }],
+      published: true,
+    }),
+  });
+  const { slug } = await created.json();
+
+  // Open the submission by hand: headers first, then only a sliver of the
+  // body, so the server sits inside readJsonBody.
+  const payload = JSON.stringify({ answers: { q1: "posted too late" } });
+  const url = new URL(base);
+  const socket = net.connect({ host: "127.0.0.1", port: Number(url.port) });
+  await once(socket, "connect");
+  socket.write(
+    `POST /api/forms/${slug}/responses HTTP/1.1\r\n` +
+      `host: 127.0.0.1\r\n` +
+      `content-type: application/json\r\n` +
+      `content-length: ${Buffer.byteLength(payload)}\r\n` +
+      `connection: close\r\n\r\n`,
+  );
+  socket.write(payload.slice(0, 10));
+  await new Promise((r) => setTimeout(r, 100));
+
+  // The owner deletes the form while the body is still arriving.
+  const deleted = await fetch(`${base}/api/forms/${slug}`, {
+    method: "DELETE",
+    headers: bearer(token),
+  });
+  assert.equal(deleted.status, 204);
+
+  // Finishing the submission must not resurrect anything.
+  socket.end(payload.slice(10));
+  const chunks = [];
+  for await (const chunk of socket) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  assert.match(raw, /^HTTP\/1\.1 404/, "the late submission is rejected");
+
+  // No orphan response survives, not even under a recreated form with the
+  // same slug.
+  const recreated = await fetch(`${base}/api/forms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...bearer(token) },
+    body: JSON.stringify({
+      title: "Vanishing",
+      questions: [{ type: "text", label: "Name?" }],
+      published: true,
+    }),
+  });
+  assert.equal(recreated.status, 201);
+  const responses = await (
+    await fetch(`${base}/api/forms/${slug}/responses`, { headers: bearer(token) })
+  ).json();
+  assert.deepEqual(responses, []);
+  server.close();
 });
 
 test("CSV export escapes separators, quotes, newlines and formulas", async () => {

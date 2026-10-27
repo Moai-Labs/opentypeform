@@ -154,20 +154,22 @@ function createDocument() {
 // Runs a page script (builder.js / dashboard.js) in a sandbox with the given
 // document, location and fetch stub, plus the other globals they touch.
 // `preludes` are extra sources (e.g. columns.js) evaluated first, exactly as
-// the page's <script> tags order them.
-function runPage(source, { document, fetch, location, confirm, preludes = [] }) {
+// the page's <script> tags order them. `navigator` stands in for the browser
+// one, e.g. to spy on the clipboard.
+function runPage(source, { document, fetch, location, confirm, preludes = [], navigator: nav }) {
   const vm = require("node:vm");
   const sandbox = {
     document,
     fetch,
     location: location || { search: "", href: "", origin: "http://localhost" },
-    navigator: {},
+    navigator: nav || {},
     window: { open() {} },
     confirm: confirm || (() => true),
     URLSearchParams,
     setTimeout,
     clearTimeout,
     console,
+    crypto: globalThis.crypto,
   };
   sandbox.self = sandbox;
   vm.createContext(sandbox);

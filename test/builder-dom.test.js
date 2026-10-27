@@ -26,7 +26,7 @@ const template = () => ({
 });
 
 // Boots the builder at a given ?form= slug with a scripted API.
-function boot({ search = "", form = null, template: tpl = template() } = {}) {
+function boot({ search = "", form = null, template: tpl = template(), navigator: nav } = {}) {
   const { document, app } = createDocument();
   const location = { search, href: "", origin: "http://localhost" };
   const calls = [];
@@ -44,7 +44,7 @@ function boot({ search = "", form = null, template: tpl = template() } = {}) {
     }
     throw new Error(`unexpected fetch: ${options ? options.method || "GET" : "GET"} ${pathArg}`);
   };
-  runPage(source, { document, fetch: fetchStub, location });
+  runPage(source, { document, fetch: fetchStub, location, navigator: nav });
   return { app, location, calls };
 }
 
@@ -146,7 +146,8 @@ test("a new question moved before an existing one never steals its id", async ()
   await settle();
 
   const [body] = putBodies(calls);
-  assert.equal(body.questions[0].id, "q3", "the new question gets a free id");
+  const fresh = body.questions[0].id;
+  assert.doesNotMatch(fresh, /^q\d+$/, "the new question carries its own creation-time id");
   assert.equal(body.questions[1].id, "q1", "the existing question keeps its id");
   assert.equal(body.questions[1].label, "What's your name?");
   assert.equal(body.questions[2].id, "q2");
@@ -168,7 +169,8 @@ test("a removed question's id is never reused, across repeated saves", async () 
 
   const [first] = putBodies(calls);
   assert.ok(!first.questions.some((q) => q.id === "q1"), "the removed id stays retired");
-  assert.deepEqual(first.questions.map((q) => q.id), ["q2", "q3"]);
+  assert.equal(first.questions[0].id, "q2", "the surviving question keeps its id");
+  assert.doesNotMatch(first.questions[1].id, /^q\d+$/, "the added question has its creation-time id");
 
   // The editor hydrates from the save response; a further remove/add cycle
   // still cannot take a retired id.
@@ -190,4 +192,56 @@ test("a removed question's id is never reused, across repeated saves", async () 
   assert.ok(app.querySelector("input.share"), "the share link is showing");
   assert.ok(findByText(app.querySelectorAll("button"), "Copy share link"));
   assert.ok(findByText(app.querySelectorAll("button"), "Publish"));
+});
+
+test("the share link shows its URL and copies that exact string", async () => {
+  let copied = null;
+  const navigator = { clipboard: { writeText: async (t) => (copied = t) } };
+  const { app } = boot({ search: "?form=client-enquiry", form: existingForm(), navigator });
+  await settle();
+
+  const share = app.querySelector("input.share");
+  assert.ok(share, "the share input exists");
+  assert.equal(share.value, "http://localhost/f/client-enquiry", "the input carries the share URL");
+
+  const copy = findByText(app.querySelectorAll("button"), "Copy share link");
+  copy.emit("click");
+  await settle();
+  assert.equal(copied, "http://localhost/f/client-enquiry", "the clipboard gets the share URL");
+  assert.equal(copy.textContent, "Copied");
+});
+
+test("a removed question's id is never reused after the editor is reopened", async () => {
+  // Session one: remove q1 and save.
+  const first = boot({ search: "?form=client-enquiry", form: existingForm() });
+  await settle();
+  let cards = first.app.querySelectorAll(".questions .qcard");
+  findByText(cards[0].querySelectorAll("button"), "Remove").emit("click");
+  await tick();
+  findByText(first.app.querySelectorAll("button"), "Save changes").emit("click");
+  await settle();
+  const saved = putBodies(first.calls)[0];
+  assert.ok(!saved.questions.some((q) => q.id === "q1"));
+
+  // The owner reopens the builder on what the server now stores; the
+  // retired set from the first session is gone.
+  const reloaded = { ...existingForm(), questions: saved.questions };
+  const second = boot({ search: "?form=client-enquiry", form: reloaded });
+  await settle();
+
+  // Add a question with exactly the removed question's label.
+  addQuestion(second.app, "text");
+  await tick();
+  cards = second.app.querySelectorAll(".questions .qcard");
+  const label = cards[cards.length - 1].querySelector(".qhead input");
+  label.value = "What's your name?";
+  label.emit("input");
+  findByText(second.app.querySelectorAll("button"), "Save changes").emit("click");
+  await settle();
+
+  const [body] = putBodies(second.calls);
+  const added = body.questions[body.questions.length - 1];
+  assert.equal(added.label, "What's your name?", "the same-label question was added");
+  assert.notEqual(added.id, "q1", "its id differs from the removed question's id");
+  assert.ok(body.questions.every((q) => q.id !== "q1"), "the removed id is never handed out again");
 });

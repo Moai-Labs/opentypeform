@@ -52,7 +52,7 @@ const responses = () => [
   },
 ];
 
-function boot() {
+function boot({ navigator: nav } = {}) {
   const { document, app } = createDocument();
   const calls = [];
   const fetchStub = async (path, options) => {
@@ -63,7 +63,12 @@ function boot() {
     if (path === "/api/forms/client-enquiry/responses") return jsonResponse(200, responses());
     throw new Error(`unexpected fetch: ${path}`);
   };
-  runPage(source, { document, fetch: fetchStub, preludes: [columnsSource] });
+  runPage(source, {
+    document,
+    fetch: fetchStub,
+    preludes: [columnsSource],
+    navigator: nav,
+  });
   return { app, calls };
 }
 
@@ -114,4 +119,24 @@ test("opening a form shows its responses and a working CSV export", async () => 
   assert.equal(rows.length, 2);
   const lastCells = rows[1].querySelectorAll("td").map((td) => td.textContent);
   assert.deepEqual(lastCells, ["2026-10-27 11:00", "Grace Hopper", "A compiler.", "5000"]);
+});
+
+test("the share link shows its URL and copies that exact string", async () => {
+  let copied = null;
+  const navigator = { clipboard: { writeText: async (t) => (copied = t) } };
+  const { app } = boot({ navigator });
+  await settle();
+
+  findByText(app.querySelectorAll("button"), "Responses").emit("click");
+  await settle(3);
+
+  const share = app.querySelector("input.share");
+  assert.ok(share, "the share input exists");
+  assert.equal(share.value, "http://localhost/f/client-enquiry", "the input carries the share URL");
+
+  const copy = findByText(app.querySelectorAll("button"), "Copy share link");
+  copy.emit("click");
+  await settle();
+  assert.equal(copied, "http://localhost/f/client-enquiry", "the clipboard gets the share URL");
+  assert.equal(copy.textContent, "Copied");
 });

@@ -212,7 +212,8 @@
     back.type = "button";
     back.addEventListener("click", load);
 
-    const share = el("input", "share", shareUrl);
+    const share = el("input", "share");
+    share.value = shareUrl;
     share.readOnly = true;
     const copy = el("button", "secondary", "Copy share link");
     copy.type = "button";

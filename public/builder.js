@@ -75,8 +75,26 @@
     );
   }
 
+  // A new question's id is assigned the moment the question is created and
+  // drawn from a space that cannot collide with the stored qN ids of any
+  // earlier editor session — so a removed question's id is never handed out
+  // again, even after the builder is closed and reopened.
+  function freshId() {
+    const c = globalThis.crypto;
+    if (c && typeof c.randomUUID === "function") {
+      return `q_${c.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    }
+    return `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   function newQuestion(type = "text") {
-    return { type, label: "", required: false, ...(type === "choice" ? { options: ["", ""] } : {}) };
+    return {
+      id: freshId(),
+      type,
+      label: "",
+      required: false,
+      ...(type === "choice" ? { options: ["", ""] } : {}),
+    };
   }
 
   // --- the editor ---
@@ -255,10 +273,12 @@
   }
 
   // Assign stable, server-safe ids. Every question that already has an id
-  // keeps it, wherever it sits in the list; new ones get the first free qN.
-  // Retired ids — questions removed this session — stay reserved, so ids are
-  // never reused for an unrelated question and old answers can never be
-  // silently attached to a different question.
+  // keeps it, wherever it sits in the list — new questions carry one from
+  // the moment they are created (freshId). The first-free qN path only
+  // covers questions that arrive without an id, e.g. a template predating
+  // client-side ids. Retired ids — questions removed this session — stay
+  // reserved there too, so ids are never reused for an unrelated question
+  // and old answers can never be silently attached to a different question.
   function withIds(questions) {
     const present = new Set();
     for (const q of questions) {
@@ -330,7 +350,8 @@
 
   // Publish toggle + share link, once the form exists.
   function publishedRow(error) {
-    const share = el("input", "share", `${location.origin}/f/${state.slug}`);
+    const share = el("input", "share");
+    share.value = `${location.origin}/f/${state.slug}`;
     share.readOnly = true;
     const copy = el("button", "secondary", "Copy share link");
     copy.type = "button";
