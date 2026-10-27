@@ -46,7 +46,10 @@ matters most. Everything the agent builds is public, here, from the first commit
 - **Pro, $9 per 30 days**: 1,000 responses a month; unbranded runners.
 
 Enforcement is real: over the limit, collection pauses — the runner tells the respondent and
-further submissions are refused until the plan is paid or the month rolls over.
+further submissions are refused until the plan is paid or the month rolls over. Monthly usage
+is charged per account when a submission is accepted and kept in its own file, so deleting a
+form cannot refund the month; the count also survives a crash between writing the response
+and writing the charge.
 
 ## Payments (test USDC — tests, clearly labelled)
 
@@ -62,6 +65,10 @@ How it works, verified in the product itself:
    (`RPC_URL`, default `https://sepolia.base.org`) and credits one 30-day plan per whole
    9 USDC that arrived and was not credited before. The state is on disk, so a restart
    neither loses a payment nor credits one twice.
+
+A renewal is confirmed only when the plan's expiry actually moves past where it stood when
+the payment was started — a paid plan sitting still is not proof of a new payment, so the
+page keeps showing the address and the waiting state until the chain says otherwise.
 
 Token: Circle's official test USDC on Base Sepolia,
 `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (6 decimals). A payer can get test USDC from
@@ -88,8 +95,9 @@ npm start         # serves on PORT, state in DATA_DIR (or /data if writable)
 ```
 
 State lives in plain JSON files (`forms.json`, `responses.json`, `accounts.json`,
-`sessions.json`, `billing.json`) written atomically on every mutation and read back on boot;
-the restore path is covered by tests. No customer data or secrets belong in the repository.
+`sessions.json`, `billing.json`, `usage.json`) written atomically on every mutation and read
+back on boot; the restore path is covered by tests. No customer data or secrets belong in the
+repository.
 
 ## Licence
 
