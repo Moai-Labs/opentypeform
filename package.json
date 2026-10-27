@@ -1,0 +1,14 @@
+{
+  "name": "opentypeform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Conversational forms: one question at a time, shareable links, no respondent accounts.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
