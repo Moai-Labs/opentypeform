@@ -133,6 +133,49 @@ test("the server rejects invalid submissions with a helpful error", async () => 
   server.close();
 });
 
+// JSON.parse("null") succeeds, so a literal null body is valid JSON — it used
+// to be mistaken for the "already handled" sentinel and the request hung.
+test("a JSON null body gets a prompt 400 on submission and creation, storing nothing", async () => {
+  const { server, base } = await listen(createApp({ dataDir: tmpDir(), adminToken: TOKEN }));
+  const post = (path, headers) =>
+    fetch(`${base}${path}`, {
+      method: "POST",
+      headers,
+      body: "null",
+      signal: AbortSignal.timeout(5_000),
+    });
+
+  try {
+    const submission = await post(`/api/forms/${TEMPLATE_SLUG}/responses`, {
+      "content-type": "application/json",
+    });
+    assert.equal(submission.status, 400, "a null submission is rejected, not hung");
+    assert.match((await submission.json()).error, /JSON object/);
+
+    const creation = await post("/api/forms", { ...OWNER, "content-type": "application/json" });
+    assert.equal(creation.status, 400, "a null creation body is rejected, not hung");
+    assert.match((await creation.json()).error, /JSON object/);
+
+    // Neither request may have mutated the store.
+    const responses = await fetch(`${base}/api/forms/${TEMPLATE_SLUG}/responses`, {
+      headers: OWNER,
+    });
+    assert.deepEqual(await responses.json(), [], "no response was stored from a null body");
+    const forms = await fetch(`${base}/api/forms`, { headers: OWNER });
+    const formList = await forms.json();
+    assert.equal(
+      formList.filter((f) => f.slug !== TEMPLATE_SLUG).length,
+      0,
+      "no form was created from a null body",
+    );
+  } finally {
+    // A hanging request (the bug this guards against) must not hang the
+    // process: drop the sockets even when the assertions above fail.
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test("malformed number and rating answers are rejected, not coerced or stored", async () => {
   const dir = tmpDir();
   const { server, base } = await listen(createApp({ dataDir: dir, adminToken: TOKEN }));
