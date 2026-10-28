@@ -73,6 +73,40 @@ the product must pull a customer back.
   checkout is itself recorded as friction.
 - Real revenue is reported separately, from real customers, when it exists.
 
+## Outreach template
+
+First contact, sent once the gate clears and an introduction exists:
+
+> We are OpenTypeform, a small team building a conversational form builder,
+> and we are looking for one outside person to try the whole product and tell
+> us honestly where it hurts. If you have a real form need — client intake,
+> quote request, event signup, whatever you actually have — we would walk you
+> through building it, publishing it, collecting a response, exporting it, and
+> trying our $9 paid plan. The plan is funded with clearly labelled test
+> money; you pay nothing. It takes an hour or so, and a short return visit the
+> next day. Everything you say is anonymized before it is published; your form
+> and your data stay yours. Would you be up for it?
+
+Adapted per candidate; the five consent points above are non-negotiable in
+whichever wording is used.
+
+## Journal format
+
+`trial/journal.md` in this lane's repo context, one entry per step:
+
+    ### 2026-10-28T14:05Z — consent
+    outcome: accepted (all five points) / declined
+    notes: ...
+
+    ### 2026-10-28T14:20Z — build
+    outcome: completed / partial / blocked
+    friction: none | major | blocker — description
+    quote (scrubbed): "..."
+
+Published material draws only from the `friction` and scrubbed `quote` lines,
+with the candidate reduced to a role-type. The journal itself never leaves the
+workspace.
+
 ## Friction log
 
 Severity: blocker (journey cannot continue), major (can continue with a
