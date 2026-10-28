@@ -1,6 +1,6 @@
-// A minimal DOM for testing the plain-JavaScript runner (public/runner.js) in
-// Node — just the element APIs the script uses, plus a vm sandbox that runs
-// the page source with controllable timers. No dependencies on purpose.
+// A minimal DOM for testing the plain-JavaScript owner pages (builder.js,
+// dashboard.js) in Node — just the element APIs those scripts use, plus a
+// vm sandbox to run a page's source in. No dependencies on purpose.
 "use strict";
 
 class FakeElement {
@@ -13,12 +13,12 @@ class FakeElement {
     this.value = "";
     this.checked = false;
     this.disabled = false;
+    this.readOnly = false;
     this.type = "";
     this.placeholder = "";
     this.href = "";
-    this.name = "";
-    this.id = "";
-    this.style = {};
+    this.min = "";
+    this.max = "";
     const self = this;
     this.classList = {
       add: (c) => self.setClasses(new Set([...self.classes(), c])),
@@ -67,15 +67,31 @@ class FakeElement {
     this.append(...kids);
   }
 
+  before(node) {
+    const p = this.parentNode;
+    if (!p) return;
+    p.children.splice(p.children.indexOf(this), 0, node);
+    if (typeof node !== "string") node.parentNode = p;
+  }
+
+  remove() {
+    if (!this.parentNode) return;
+    const p = this.parentNode;
+    p.children.splice(p.children.indexOf(this), 1);
+    this.parentNode = null;
+  }
+
   addEventListener(type, fn) {
     (this.listeners[type] ||= []).push(fn);
   }
 
-  // Fires a listener with just enough event shape for the runner: an optional
-  // detail (e.g. { key: "Enter" }) merged over a preventDefault stub.
-  emit(type, detail = {}) {
-    const event = { preventDefault() {}, target: this, ...detail };
-    for (const fn of this.listeners[type] || []) fn(event);
+  // Fires a listener with just enough event shape for these scripts.
+  // `event` merges into the synthetic event so keyboard tests can pass
+  // key/modifiers; existing callers that emit plain clicks are unaffected.
+  emit(type, event) {
+    for (const fn of this.listeners[type] || []) {
+      fn({ preventDefault() {}, target: this, ...event });
+    }
   }
 
   descendants() {
@@ -98,8 +114,8 @@ class FakeElement {
   focus() {}
 }
 
-// Supports what the runner uses: "button", "p.error", "input, textarea" and
-// descendant chains like ".choices input".
+// Supports what the pages use: "button", "p.error", "input, textarea" and
+// descendant chains like ".questions .qcard".
 function matches(el, selector) {
   return selector.split(",").some((part) => matchChain(el, part.trim().split(/\s+/)));
 }
@@ -126,65 +142,45 @@ function matchSimple(el, simple) {
 function createDocument() {
   const app = new FakeElement("main");
   app.id = "app";
-  const bar = new FakeElement("div");
-  bar.id = "progress-bar";
   return {
     app,
-    bar,
     document: {
       title: "",
-      getElementById: (id) => (id === "app" ? app : id === "progress-bar" ? bar : null),
+      getElementById: (id) => (id === "app" ? app : null),
       createElement: (tag) => new FakeElement(tag),
       createTextNode: (t) => String(t),
     },
   };
 }
 
-// Manually fired timers: the runner's auto-advance is a 250 ms setTimeout, and
-// these tests need to decide exactly when it fires — and that nothing fires
-// twice after a navigation cancelled it.
-function makeTimers() {
-  const pending = [];
-  let nextId = 1;
-  return {
-    pending,
-    setTimeout(fn, ms) {
-      const timer = { id: nextId++, fn, ms, cancelled: false };
-      pending.push(timer);
-      return timer.id;
-    },
-    clearTimeout(id) {
-      const timer = pending.find((t) => t.id === id);
-      if (timer) timer.cancelled = true;
-    },
-    // Runs the timers that were pending when it was called, in order; timers
-    // scheduled while firing wait for the next call, exactly like real time.
-    fire() {
-      const due = pending.splice(0);
-      for (const t of due) if (!t.cancelled) t.fn();
-    },
-  };
-}
-
-// Runs the runner script in a sandbox with the given document, location and
-// fetch stub. Returns the sandbox so tests can inspect the rendered app.
-function runPage(source, { document, fetch, location, timers }) {
+// Runs a page script (builder.js / dashboard.js) in a sandbox with the given
+// document, location and fetch stub, plus the other globals they touch.
+// `preludes` are extra sources (e.g. columns.js) evaluated first, exactly as
+// the page's <script> tags order them. `navigator` stands in for the browser
+// one, e.g. to spy on the clipboard.
+function runPage(source, { document, fetch, location, confirm, preludes = [], navigator: nav }) {
   const vm = require("node:vm");
   const sandbox = {
     document,
     fetch,
-    location,
-    setTimeout: timers.setTimeout,
-    clearTimeout: timers.clearTimeout,
+    location: location || { search: "", href: "", origin: "http://localhost" },
+    navigator: nav || {},
+    window: { open() {} },
+    confirm: confirm || (() => true),
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
     console,
+    crypto: globalThis.crypto,
   };
   sandbox.self = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(source, sandbox, { filename: "runner.js" });
+  preludes.forEach((src, i) => vm.runInContext(src, sandbox, { filename: `prelude-${i}.js` }));
+  vm.runInContext(source, sandbox, { filename: "page.js" });
   return sandbox;
 }
 
-// Lets the runner's fetch promise settle.
+// Lets an async init settle.
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-module.exports = { FakeElement, createDocument, makeTimers, runPage, tick };
+module.exports = { FakeElement, createDocument, runPage, tick };
