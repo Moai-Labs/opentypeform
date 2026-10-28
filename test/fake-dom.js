@@ -86,9 +86,11 @@ class FakeElement {
   }
 
   // Fires a listener with just enough event shape for these scripts.
-  emit(type) {
+  // `event` merges into the synthetic event so keyboard tests can pass
+  // key/modifiers; existing callers that emit plain clicks are unaffected.
+  emit(type, event) {
     for (const fn of this.listeners[type] || []) {
-      fn({ preventDefault() {}, target: this });
+      fn({ preventDefault() {}, target: this, ...event });
     }
   }
 

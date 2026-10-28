@@ -160,3 +160,15 @@ test("validateAnswers rejects unknown question ids and returns the field", () =>
     "missing answers object is treated as empty",
   );
 });
+
+test("a forged __proto__ answer cannot slip past the unknown-id check", () => {
+  // The wire shape is raw JSON: JSON.parse makes "__proto__" an own property,
+  // which is exactly how the server sees an attacker's body — and it is
+  // rejected as an unknown question rather than leaking into the answers.
+  const form = { questions: [q({ required: true })] };
+  const forged = JSON.parse('{"answers":{"__proto__":"x"}}');
+  assert.deepEqual(
+    validateAnswers(form, forged).error,
+    'unknown question "__proto__"',
+  );
+});

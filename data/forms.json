@@ -1,0 +1,63 @@
+[
+  {
+    "id": "ffa58cc9-5d68-4a91-b56a-ddb4084683a1",
+    "slug": "enquiry",
+    "title": "Client enquiry",
+    "description": "A short enquiry form for independent consultants and small businesses. Edit or replace it once the builder lands — for now it shows what a finished form feels like.",
+    "published": true,
+    "createdAt": "2026-10-28T04:57:27.665Z",
+    "updatedAt": "2026-10-28T04:57:27.665Z",
+    "questions": [
+      {
+        "id": "q1",
+        "type": "text",
+        "label": "What's your name?",
+        "required": true,
+        "placeholder": "Ada Lovelace"
+      },
+      {
+        "id": "q2",
+        "type": "email",
+        "label": "What's the best email to reach you?",
+        "required": true,
+        "placeholder": "you@example.com"
+      },
+      {
+        "id": "q3",
+        "type": "choice",
+        "label": "What do you need help with?",
+        "required": true,
+        "options": [
+          "Strategy",
+          "Design",
+          "Development",
+          "Something else"
+        ]
+      },
+      {
+        "id": "q4",
+        "type": "number",
+        "label": "What's your budget, in USD?",
+        "required": false,
+        "description": "A rough range is fine — skip if you'd rather talk first.",
+        "placeholder": "5000"
+      },
+      {
+        "id": "q5",
+        "type": "text",
+        "label": "Tell us a little about the project.",
+        "required": true,
+        "multiline": true,
+        "placeholder": "What are you building, and by when?"
+      },
+      {
+        "id": "q6",
+        "type": "rating",
+        "label": "How urgent is this?",
+        "required": false,
+        "max": 5,
+        "description": "1 = can wait, 5 = yesterday"
+      }
+    ]
+  }
+]

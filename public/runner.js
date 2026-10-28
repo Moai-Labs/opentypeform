@@ -180,7 +180,7 @@
   }
 
   function showDone() {
-    setProgress(100);
+    setProgress(1);
     app.replaceChildren(
       el("h1", null, "Thank you!"),
       el("p", "muted", "Your response has been recorded."),
